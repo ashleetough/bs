@@ -1,319 +1,357 @@
-ROOT CAUSE FOUND. Do not debug palette, renderer, atlas composition, or sprite
-IDs.
-
-The pickup generator has TWO coordinate-resolution paths, and the one that
-actually emits SPRTEX is stale.
+Handle these as two editor/UX problems first. Do not change the raycaster
+mathematics speculatively.
 
 ==================================================
-PROVEN CURRENT ART
+1. HALF WALLS — VERIFY PAINT STATE BEFORE RUNTIME
 ==================================================
 
-? TEX reports:
+The static runtime chain is already clean:
 
-    ammo:idle
-        page 1
-        x320..383
-        y128..191
-        raw alpha 1886
-        composed alpha 1886
-        PAINTED
-
-    health:idle
-        page 1
-        x384..447
-        y128..191
-        raw alpha 1046
-        composed alpha 1046
-        PAINTED
-
-So the atlas/composer is correct.
-
-==================================================
-ACTUAL BUG
-==================================================
-
-pickupBAS correctly does:
-
-    const _pc = findCell(
-        atlasLayout,
-        p.cell === '6' ? 'ammo' : 'health',
-        'idle'
-    );
-
-    const _pr = _pc
-        ? cellToRect(_pc, SPRITE_SIZE)
-        : null;
-
-BUT the actual one-time pickupInit ignores _pr and still emits hardcoded old
-32px atlas coordinates:
-
-    const pickupInit = pickups.map((p, n) => {
-      const s = 6 + n;
-      const tex = p.cell === '6'
-        ? `SPRTEX ${s},1,128,0,159,31`
-        : `SPRTEX ${s},1,160,0,191,31`;
-      return ` ${tex}\n SPRPAL ${s},1,0,1`;
-    }).join('\n');
-
-Those coordinates are stale.
-
-They sample:
-
-    ammo:
-        p1 x128..159 y0..31
-
-    health:
-        p1 x160..191 y0..31
-
-instead of the actual 64x64 cells:
-
-    ammo:
-        p1 x320..383 y128..191
-
-    health:
-        p1 x384..447 y128..191
-
-This exactly explains the visible hollow/transparent little square.
-
-==================================================
-FIX
-==================================================
-
-Make pickupInit use the SAME canonical atlas resolution as every other sprite.
-
-Do not hardcode any page/x/y coordinates.
-
-For every pickup:
-
-    const id = p.cell === '6' ? 'ammo' : 'health';
-    const c = findCell(atlasLayout, id, 'idle');
-
-If no cell exists:
-
-    log a clear build error
-    do not emit a stale fallback texture
-
-If it exists:
-
-    const r = cellToRect(c, SPRITE_SIZE);
-
-emit:
-
-    SPRTEX s,r.page,r.x,r.y,r.x2,r.y2
-    SPRPAL s,1,0,1
-
-Conceptually:
-
-    const pickupInit = pickups.map((p, n) => {
-      const s = 6 + n;
-      const id = p.cell === '6' ? 'ammo' : 'health';
-      const c = findCell(atlasLayout, id, 'idle');
-
-      if (!c) {
-        console.error('[DOOM] no atlas cell for', id,
-                      '— pickup sprite disabled');
-        return ` SPROFF ${s}`;
-      }
-
-      const r = cellToRect(c, SPRITE_SIZE);
-
-      return [
-        ` SPRTEX ${s},${r.page},${r.x},${r.y},${r.x2},${r.y2}`,
-        ` SPRPAL ${s},1,0,1`
-      ].join('\n');
-    }).join('\n');
-
-Use the project's actual rect property names if they are currently x/y/x2/y2
-or x/y/y2 etc. Inspect cellToRect first rather than assuming.
-
-==================================================
-REMOVE THE DUPLICATED LOOKUP
-==================================================
-
-Right now pickupBAS resolves _pc/_pr but does not use _pr for texture setup.
-
-Do not leave two independent pickup texture lookups again.
-
-Prefer one canonical helper, for example:
-
-    resolvePickupRect(p)
-
-or resolve the rect once per pickup while constructing the pickup descriptors.
-
-Then BOTH:
-
-    pickupBAS
-    pickupInit
-
-consume that resolved object.
-
-Example intermediate structure:
-
-    pickupsResolved = pickups.map((p,n) => ({
-        ...p,
-        spriteId: 6+n,
-        resourceId: p.cell === '6' ? 'ammo' : 'health',
-        rect: ...
-    }))
-
-Then use:
-
-    pickupResolved.rect
-
-everywhere.
-
-The important invariant:
-
-    semantic resource
+    halfCells[cell]
         ->
-    findCell
+    HC$ 196-character string
         ->
-    cellToRect
+    HC$(MI2:MI2)
         ->
-    ALL generated SPRTEX commands
+    WH=INT(WH/2)
+        ->
+    SY1/SY2
 
-No duplicate hardcoded atlas knowledge.
+Do NOT rewrite HC$, MI2, WH or projection yet.
 
-==================================================
-DO NOT KEEP THE OLD FALLBACK
-==================================================
+The leading explanation is:
 
-Do not fall back to:
+    HALF is captured when the map cell is painted.
 
-    128,0,159,31
+Selecting HALF afterward does not retroactively alter an existing wall.
 
-or:
+Prove this in the editor first.
 
-    160,0,191,31
+Add a temporary/debug readout for the cell under the cursor or selected cell:
 
-Those are obsolete 32px coordinates and hide layout failures.
+    CELL index
+    map value
+    halfCells[index]
 
-If resolution fails:
+Example:
 
-    fail loudly
-    or disable that sprite
+    CELL 37
+    WALL 2
+    HALF 0
 
-Never silently sample some unrelated atlas region.
+Then:
 
-==================================================
-ADD A FINAL GENERATED-BASIC ASSERTION
-==================================================
+1. place a wall while FULL is selected
+2. select HALF without clicking wall again
+3. confirm HALF remains 0
+4. click the existing wall with HALF selected
+5. confirm HALF becomes 1
+6. generate BAS and confirm the corresponding HC$ character is 1
 
-We got caught by exactly the same class of bug as the wall strips:
-the source-level resolver looked correct, but nobody inspected the FINAL
-generated SPRTEX.
-
-Add a semantic pickup assertion after final generation.
-
-For every generated pickup sprite, know:
-
-    sprite id
-    expected page
-    expected x1/y1/x2/y2
-
-Then assert that final BAS contains exactly the expected:
-
-    SPRTEX <id>,<page>,<x1>,<y1>,<x2>,<y2>
-
-For the current state this should include, assuming these are the first two
-pickups:
-
-    ammo:
-        SPRTEX 6,1,320,128,383,191
-
-    health:
-        SPRTEX 7,1,384,128,447,191
-
-If map order gives them different sprite IDs, use those actual IDs.
-
-Do not assert merely that:
-
-    SPRTEX 6
-
-exists.
-
-Assert the complete rect.
-
-Also add a stale-coordinate assertion that fails if final generated pickup
-setup contains the known obsolete forms:
-
-    ,1,128,0,159,31
-    ,1,160,0,191,31
+If this sequence behaves as above, the renderer is innocent.
 
 ==================================================
-SPRPAL
+2. MAKE SHAPE APPLY TO EXISTING BLOCK WALLS
 ==================================================
 
-Do NOT change SPRPAL.
+Yes: clicking an existing BLOCK wall should be able to modify its FULL/HALF
+state.
 
-Current:
+The current UX should behave as "place or modify", not "shape only captured
+on first placement".
 
-    SPRPAL s,1,0,1
+When BLOCK mode is active and a wall cell is clicked:
 
-matches the normal palette usage for other correctly rendered sprites.
+    existing or new wall
+        ->
+    set halfCells[index] = brushHalf
 
-There is no evidence of a palette-offset problem.
+Do not require the user to erase and repaint the wall to change its height.
 
-The wrong source rectangle fully explains the symptom.
+If the click also paints a selected wall material/type, preserve the existing
+normal painting behaviour.
 
-==================================================
-SPRITE IDS
-==================================================
+But the important invariant is:
 
-No collision is evident.
-
-Current allocation:
-
-    enemies     1..5
-    pickups     6..13   (MAX_PICKUPS 8)
-    gun         20
-    walls       200..327
-
-The recent enemy map-slot allocation fix does not make enemy sprite IDs expand
-beyond 1..5.
-
-Do not change IDs.
-
-Optionally add a build-time allocation assertion so these ranges can never
-silently overlap later.
+    every successful BLOCK-wall click updates halfCells for that cell.
 
 ==================================================
-DUMP BAS
+3. CLEAR HALF METADATA WHEN CELL STOPS BEING A BLOCK
 ==================================================
 
-The BAS dump is still useful as verification, but we do NOT need to wait for it
-to identify the cause now.
+When a map cell is changed to FLOOR or another non-block object, clear stale
+block-height metadata:
 
-Before shipping the fix, inspect the final generated pickup lines and report
-them.
+    halfCells[index] = false
 
-For current ammo/health art expected approximately:
+Otherwise:
 
-    SPRTEX <ammo sprite>,1,320,128,383,191
-    SPRPAL <ammo sprite>,1,0,1
+    wall HALF
+    -> erase to floor
+    -> later place another wall
 
-    SPRTEX <health sprite>,1,384,128,447,191
-    SPRPAL <health sprite>,1,0,1
+could silently resurrect the previous HALF setting.
+
+Likewise RESET / CLEAR MAP should reset halfCells appropriately.
+
+Save/load should continue carrying halfCells.
 
 ==================================================
-DO NOT TOUCH
+4. ADD A VISIBLE HALF-WALL MAP AFFORDANCE
 ==================================================
 
-Do not modify:
+The map editor should visibly distinguish HALF from FULL blocks.
+
+For example:
+
+    FULL wall = normal filled tile
+    HALF wall = same tile colour with a small H marker / inner border /
+                horizontal split indicator
+
+Do not rely only on the FULL/HALF toolbar button.
+
+The user needs to be able to look at the map and see which existing cells have
+the flag.
+
+This also makes the paint-time bug immediately obvious if it ever recurs.
+
+==================================================
+5. DO NOT CHANGE HC$ YET
+==================================================
+
+The BASIC substring expression:
+
+    HC$(MI2:MI2)
+
+uses the same substring model already used successfully by:
+
+    M$(MI:MI)
+
+and both strings are 196 characters.
+
+There is currently no evidence that HC$ itself is the problem.
+
+Only investigate hardware substring semantics if:
+
+    editor says HALF=1
+    generated HC$ has 1 at correct index
+    final BAS contains the correct test
+    BUT hardware still draws full height.
+
+If that happens, make a tiny isolated EZ-BASIC HC$ test rather than changing
+the raycaster.
+
+==================================================
+6. THIN WALL ERASE — ADD EXPLICIT ERASE MODE
+==================================================
+
+Add an explicit:
+
+    ERASE
+
+brush/mode.
+
+It should be visually obvious and live alongside BLOCK / THIN / decoration
+editing.
+
+ERASE must operate according to what the cursor actually targets.
+
+If cursor is inside a cell:
+
+    clear map cell to FLOOR
+    clear halfCells[index]
+    clear decoration/object occupying that cell if appropriate
+
+If cursor is near an H/V edge:
+
+    clear that exact hEdges/vEdges entry
+
+Do NOT use toggle semantics while ERASE is active.
+
+ERASE means:
+
+    set to empty
+
+never:
+
+    empty -> create something
+
+==================================================
+7. DO NOT MAKE FLOOR DELETE ALL FOUR EDGES
+==================================================
+
+Do NOT automatically erase every edge surrounding a cell whenever FLOOR is
+painted.
+
+Thin walls live on shared boundaries.
+
+For example:
+
+    cell A | thin wall | cell B
+
+Painting FLOOR into cell A should not necessarily destroy a wall that the user
+intended as the boundary of cell B / corridor geometry.
+
+That would make FLOOR destructive beyond the clicked cell and could become
+very surprising.
+
+Keep the concepts distinct:
+
+    FLOOR = cell contents
+    ERASE = explicit destructive editing tool
+    THIN = edge geometry
+
+==================================================
+8. OPTIONAL FLOOR CONVENIENCE
+==================================================
+
+If desired, FLOOR may clear edge geometry ONLY when the click itself is in the
+edge hit-zone.
+
+But a centre-cell FLOOR click should not wipe all neighbouring edges.
+
+The explicit ERASE mode should be the canonical way to remove arbitrary
+geometry.
+
+==================================================
+9. MAKE EDGE TARGETING LESS FIDDLY
+==================================================
+
+Current EDGE_HIT is approximately 4px in a 16px cell.
+
+When:
+
+    THIN mode
+or
+    ERASE mode
+
+is active, widen the edge hit region because the user's intent is specifically
+to interact with boundaries.
+
+For example, increase the hit tolerance enough that selecting an edge feels
+deliberate but does not make corners ambiguous.
+
+If a click falls near a corner where both H and V are candidates, choose the
+nearest edge geometrically rather than toggling both.
+
+==================================================
+10. ERASE VISUAL FEEDBACK
+==================================================
+
+When hovering in ERASE mode, highlight exactly what will be deleted:
+
+    cell
+or
+    horizontal edge
+or
+    vertical edge
+or
+    decoration
+
+This is much better than forcing the user to guess which 4px hit zone they are
+inside.
+
+The existing problem is partly discoverability, not only data mutation.
+
+==================================================
+11. KEEP THIN EDGE TOGGLE AS A SHORTCUT
+==================================================
+
+The existing THIN behaviour:
+
+    click empty edge -> create
+    click occupied edge -> remove
+
+can stay.
+
+It is a useful quick toggle.
+
+But ERASE provides an unambiguous second route for removing an edge.
+
+Do not remove the existing working toggle merely because ERASE exists.
+
+==================================================
+12. ACCEPTANCE TESTS
+==================================================
+
+HALF TEST:
+
+A.
+    select WALL 1 + FULL
+    click empty cell
+    -> full wall
+
+B.
+    select HALF
+    click SAME existing wall
+    -> map indicator changes to HALF
+    -> halfCells[index] = true
+    -> generated HC$ bit = 1
+    -> RUN renders half height
+
+C.
+    select FULL
+    click same wall
+    -> bit becomes 0
+    -> wall returns full height
+
+D.
+    erase/floor cell
+    -> halfCells[index] cleared
+
+E.
+    repaint wall
+    -> does not inherit stale half flag unless HALF is currently selected
+
+
+THIN ERASE TEST:
+
+A.
+    create horizontal thin edge
+    -> visible
+
+B.
+    ERASE hover edge
+    -> exact edge highlighted
+
+C.
+    click
+    -> edge becomes zero
+
+D.
+    repeat for vertical edge
+
+E.
+    create thin edge between two floor cells
+    paint FLOOR in one cell centre
+    -> edge remains
+
+F.
+    use ERASE on edge
+    -> edge disappears
+
+G.
+    erase block with HALF flag
+    -> cell floor + HALF flag cleared
+
+==================================================
+13. DO NOT TOUCH
+==================================================
+
+Do not change:
 
 - BSIM/BSPL
-- palette writer
-- atlas layout
-- buildTexturePages
-- painter
 - DDA
 - WXF/TXC
 - wall projection
+- atlas allocation
 - z ordering
-- pickup projection maths
-- pickup sprite IDs
+- wall-strip SPROFF behaviour
 
-This is a stale generated SPRTEX-coordinate bug.
+Inline IF only.
+
+Do not reintroduce regex substitution for HC$.
+The plain literal string replacement is already the safer path.
 
 ==================================================
 REPORT BACK
@@ -321,15 +359,16 @@ REPORT BACK
 
 Return:
 
-1. exact old pickupInit code removed
-2. canonical replacement used
-3. final generated ammo SPRTEX
-4. final generated health SPRTEX
-5. confirmation SPRPAL unchanged
-6. stale-coordinate assertion result
-7. sprite-ID collision assertion/result
-8. final BASIC line count
+1. result of FULL -> select HALF without repainting
+2. result after clicking existing wall with HALF
+3. HC$ bit before/after
+4. RUN result
+5. exact editor rule implemented for existing block clicks
+6. stale halfCells clearing rules
+7. ERASE behaviour for cells
+8. ERASE behaviour for H/V edges
+9. edge-hit tolerance change
+10. acceptance-test results
 
-Then test RUN.
-
-Do not make adjacent pickup rendering changes in the same build.
+Inspect current code first and continue through independent editor-side work
+without stopping after every subtask.
