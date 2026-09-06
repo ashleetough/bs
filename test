@@ -1,339 +1,454 @@
-Recover stability first. Do not continue from the currently broken renderer.
+Proceed with the see-through half-wall renderer.
+
+The architecture in HALF_WALL_SEE_THROUGH.md is approved, with ONE important
+scope limit:
+
+    support ONE remembered half-wall hit per ray initially.
+
+Do not implement an arbitrary transparent-wall stack yet.
 
 ==================================================
-1. REVERT TO THE LAST KNOWN-GOOD BUILD
+TARGET BEHAVIOUR
 ==================================================
 
-Return to:
+A HALF wall should:
 
-    68b77521f5e8f266
+- render at half height
+- remain physically/raycast nearer than the wall behind it
+- allow the ray to continue above it
+- show the full wall/room behind
+- allow enemies/pickups behind it to remain visible if they are nearer than
+  the far opaque wall
 
-That is the current trusted baseline.
+Known visual limitation:
 
-Known behaviour there:
+- enemies are whole SPRPOS2 rectangles
+- they cannot be clipped at the half-wall top
+- therefore an enemy behind a half wall will render fully rather than being
+  hidden below the waist
 
-- all 128 wall strips render
-- half-wall flag works
-- half walls render at half height
-- half-wall base stays on the floor
-- no transparent overlay exists
-- half walls still occlude geometry behind them
+Accept this limitation.
 
-That occlusion is acceptable for now.
-
-Do NOT try to salvage the current partial-overlay build.
-
-The current build has 28 wall strips missing SPRPOS2 / SPRDISP, so it is not a
-valid debugging baseline.
+Do NOT attempt a column-based enemy renderer.
 
 ==================================================
-2. ADD HARD STRIP-COUNT ASSERTIONS IMMEDIATELY
+1. START FROM THE VERIFIED BASELINE
 ==================================================
 
-Before any further feature work, add structural assertions to the FINAL
-generated BASIC.
+Current known state:
 
-For main wall-strip sprite IDs:
+    build   76fe4f2c275c2e96
+    strips  128/128 verified
+    lines   16,802 / 20,000
 
-    200..327
+Do not reintroduce the broken regex/post-processing overlay attempt.
 
-there must be exactly:
+Keep the existing strip-count assertion.
 
-    128 SPRPOS2 commands
-    128 SPRDISP commands
+Before implementation confirm final BAS still reports:
 
-and ideally one expected texture-selection block per ID.
+    main wall strips 200..327:
+        SPRPOS2 128/128
+        SPRDISP 128/128
 
-Do not use a loose regex such as:
+==================================================
+2. GENERATE THE OVERLAY INSIDE THE RAY EMITTER
+==================================================
+
+Do NOT search generated BASIC for SPRDISP/SPRTEX lines afterward.
+
+Anything that exists once per ray must be emitted by the same generator code
+that emits that ray's main wall strip.
+
+For ray index:
+
+    n = 0..127
+
+use:
+
+    main wall strip = 200+n
+    half overlay    = 328+n
+
+after confirming 328..455 remain unused.
+
+The main and overlay strip structure must be generated together by
+construction.
+
+==================================================
+3. DDA BEHAVIOUR
+==================================================
+
+Add one remembered-half state for the CURRENT ray.
+
+Conceptually initialise:
+
+    halfSeen = 0
+
+During DDA:
+
+    advance normally
+    inspect current map cell
+
+If cell is a normal/full opaque wall:
+
+    stop exactly as today
+
+If cell is HALF:
+
+    if halfSeen = 0:
+        remember this half-wall hit
+
+    then treat it as transparent for continuation:
+        WV = 0 / equivalent non-hit path
+        continue DDA
+
+Do NOT alter the existing DDA stepping mathematics.
+
+Do NOT let a half wall terminate the ray.
+
+==================================================
+4. REMEMBER ONLY WHAT THE OVERLAY NEEDS
+==================================================
+
+For the first HALF hit remember enough information to reconstruct its wall
+strip after the DDA finishes.
+
+At minimum likely:
+
+    halfSeen
+    half distance
+    half wall type / WV
+    half SID
+    half map-cell index
+    half fractional hit coordinate or enough data to derive it
+
+Do not overwrite the normal final-wall variables.
+
+Use separate half-wall variables.
+
+The final ordinary hit must still populate the existing:
+
+    D
+    WV
+    SID
+    WXF
+    TXC
+    WH
+    SY1
+    SY2
+
+path unchanged.
+
+==================================================
+5. COMPUTE HALF TXC INDEPENDENTLY
+==================================================
+
+The remembered half wall needs its own texture X coordinate.
+
+At the half-wall encounter, either:
+
+A. compute and store the fractional coordinate immediately
+
+or
+
+B. store half distance/SID and derive it after the loop
+
+using the same verified wall mathematics:
+
+    SID=0:
+        frac = PY + halfD*RY
+
+    SID=1:
+        frac = PX + halfD*RX
+
+    frac = frac - INT(frac)
+
+Then:
+
+    halfTXC = INT(frac*64)
+
+Apply the existing face-flip convention if the ordinary wall renderer already
+uses one.
+
+Do NOT reuse the final far-wall TXC.
+
+==================================================
+6. RENDER ORDER
+==================================================
+
+After DDA:
+
+FIRST:
+    render the ordinary FAR wall using existing strip 200+n.
+
+SECOND:
+    if halfSeen:
+        render the HALF wall using overlay strip 328+n.
+
+The half overlay uses:
+
+    remembered half depth
+    remembered half wall texture
+    remembered half TXC
+
+and projected HALF height.
+
+The half wall base remains floor-pinned using the already proven behaviour.
+
+Conceptually:
+
+    full projected half-wall height at halfD
+        ->
+    divide world height by 2
+        ->
+    keep bottom at floor
+        ->
+    lower top
+
+Do not return to centred/floating half walls.
+
+==================================================
+7. OVERLAY ABSENCE
+==================================================
+
+When no half wall was encountered for a ray, the overlay sprite must collapse
+reliably.
+
+Do NOT rely on SPROFF if the wall-strip block later executes SPRDISP.
+
+Use the established zero-height mechanism:
+
+    overlaySY2 = overlaySY1
+
+or equivalent proven collapse.
+
+The overlay strip may remain SPRDISP-enabled structurally for every ray.
+
+==================================================
+8. DEPTH BUFFER SEMANTICS
+==================================================
+
+Keep ZB storing the FAR opaque-wall distance.
+
+This is intentional.
+
+It means an enemy/pickup behind the half wall but in front of the far wall:
+
+    object distance < ZB
+
+and therefore remains drawable.
+
+Do NOT replace ZB with the half-wall distance.
+
+Doing that would restore the exact occlusion problem we are trying to remove.
+
+Known consequence:
+
+    enemy is drawn as a whole rectangle
+    not clipped at half-wall height
+
+Accept it.
+
+==================================================
+9. SPRITE DRAW ORDER
+==================================================
+
+Preserve existing known ordering unless measurement shows a problem.
+
+Expected visual compromise:
+
+    far wall
+    half-wall overlay
+    enemy may draw fully over half wall because it cannot be vertically clipped
+
+Do not try to solve that by putting the half overlay in front of every enemy,
+because that would hide the enemy's entire lower AND upper rectangle.
+
+The correct partial occlusion cannot be expressed with one rectangular enemy
+sprite.
+
+Document this limitation rather than introducing wrong z behaviour.
+
+==================================================
+10. ONE HALF WALL PER RAY
+==================================================
+
+For this version:
+
+    remember only the FIRST half wall encountered.
+
+If the ray passes through another half wall later:
+
+    do not create a stack
+    continue toward the final opaque wall
+
+This avoids:
+
+- arrays/stacks of transparent hits
+- reverse sorting
+- multiple extra sprites per ray
+- large source-line growth
+
+Document:
+
+    one visible half-wall layer per ray
+
+as the current engine limit.
+
+This can be expanded later only if real level design requires it.
+
+==================================================
+11. PERFORMANCE
+==================================================
+
+The attached estimate is roughly:
+
+    +4 executed statements per DDA step
+    +~10 generated lines per ray
+    +128 possible overlay sprites
+
+This is substantial.
+
+Before finalising, record:
+
+    baseline generated line count
+    new generated line count
+    extra executed DDA operations
+
+Try to make the no-half-wall path as cheap as possible.
+
+Do NOT add repeated expensive half-wall coordinate arithmetic inside every DDA
+step if it can be deferred until a half wall is actually encountered.
+
+Prefer:
+
+    cheap cell/flag test every step
+    detailed half-hit calculation only on encounter
+
+==================================================
+12. HARD LINE LIMIT
+==================================================
+
+20,000 BASIC lines remains absolute.
+
+If implementation approaches the limit too closely, do NOT remove assertions
+or working correctness checks to make it fit.
+
+Report the line pressure.
+
+We can choose optimisation or postpone the feature rather than silently ship a
+fragile ~19,900-line build.
+
+Target meaningful safety headroom if possible.
+
+==================================================
+13. ASSERTIONS
+==================================================
+
+Final BAS must assert:
+
+MAIN:
+    ids 200..327
+    128 SPRPOS2
+    128 SPRDISP
+    no missing ids
+
+HALF OVERLAY:
+    ids 328..455
+    128 SPRPOS2 forms
+    128 SPRDISP forms
+    no missing ids
+
+Do not accept total-count-only assertions.
+
+Check every individual id so a duplicate cannot hide a missing strip.
+
+Also assert no overlap between:
+
+    enemy ids
+    pickup ids
+    gun id
+    main wall strip ids
+    overlay ids
+
+==================================================
+14. NEVER POST-PROCESS BY LOOSE TEXT MATCHING
+==================================================
+
+Do not repeat either failed approach:
 
     SPRDISP 2\d\d
 
-because that matches only 200..299 and misses 300..327.
+or broad cleanup such as:
 
-Parse the numeric sprite ID and check the range semantically:
+    delete lines containing QH...
 
-    id >= 200 && id <= 327
+The first silently covered only 200..299.
+The second deleted legitimate main-strip code.
 
-For every ID 200..327 assert individually:
+Emit structurally.
 
-    SPRPOS2 <id> exists exactly once in the wall-render block
-    SPRDISP <id> exists exactly once
+If generated code must later be modified, use explicit markers owned by the
+ray emitter or a structured intermediate representation.
 
-Then assert totals:
-
-    main wall strips = 128
-
-Fail the build loudly if any ID is missing.
-
-Report the exact missing IDs.
+Do not rediscover ray structure from rendered BASIC text.
 
 ==================================================
-3. ADD A "DO NOT DAMAGE MAIN STRIPS" INVARIANT
+15. ACCEPTANCE TEST
 ==================================================
 
-No later generator transform should be allowed to delete or rewrite arbitrary
-main wall lines based on substring matching.
+Create a simple scene:
 
-Especially forbid cleanup patterns shaped like:
+    player
+        ->
+    HALF WALL
+        ->
+    enemy/pickup
+        ->
+    FULL WALL
 
-    remove every line containing QH...
-    replace every SPRDISP 2...
+Verify:
 
-unless the transform first proves the exact intended match set.
+A. HALF wall is half height and floor-pinned.
 
-For any transformation intended to touch 128 rays:
+B. FULL wall behind is visible in the upper half.
 
-    expected matches = 128
+C. Enemy/pickup behind remains visible.
 
-If actual != expected:
+D. Enemy may visually overlap the half wall rather than clip at its waist.
+   This is expected.
 
-    abort transformation
-    console.error
-    keep original BAS unchanged
+E. Removing the half wall produces the same far-wall projection as before.
 
-Never proceed with a partial 100/128 transformation.
+F. Replacing HALF with FULL makes it opaque again.
 
-==================================================
-4. KEEP HALF WALLS SOLID FOR NOW
-==================================================
+G. Rotate through the entire scene:
+       no missing 28-column band
+       no translucent garbage strips
+       no stale overlay columns.
 
-Do NOT implement transparent half-wall continuation in this recovery build.
-
-Current design constraint:
-
-    HALF WALL = shorter opaque wall
-
-Therefore:
-
-- its visible height is half
-- it blocks ray continuation
-- things behind it are occluded
-
-Treat that as a documented engine limitation for now, not a bug.
-
-This gives us:
-
-    correctness
-    lower interpreted cost
-    lower BASIC line count
-    fewer sprite primitives
-    simpler Z behaviour
-
-Do not spend the remaining line budget solving it yet.
+H. ? CHECK:
+       main 128/128
+       overlay 128/128
 
 ==================================================
-5. WHY THE OVERLAY IS DEFERRED
-==================================================
-
-The transparent-half-wall architecture itself is valid:
-
-    DDA encounters half wall
-    remember hit
-    continue ray
-    find far wall
-    render far wall
-    render half wall over it at nearer depth
-
-But it has meaningful cost:
-
-- extra DDA work
-- extra per-ray state
-- extra wall-strip sprites
-- additional generated BASIC
-- more render work in the current bottleneck
-
-The failed implementation reached approximately:
-
-    19,024 / 20,000 lines
-
-That is too close to the source limit for a feature that can wait.
-
-Do not optimise around that limit yet.
-
-==================================================
-6. IF TRANSPARENT HALF WALLS RETURN LATER
-==================================================
-
-Build them INSIDE the ray/strip generator.
-
-Do not add them by searching generated BASIC afterward.
-
-The generator already knows:
-
-    ray index
-    main strip sprite ID
-    screen X
-    projection variables
-
-For each of the 128 rays, generate together:
-
-    MAIN STRIP
-    optional HALF OVERLAY STRIP
-
-By construction this guarantees:
-
-    128 main strips
-    128 overlay opportunities
-
-No regex discovery pass is required.
-
-Use a deterministic overlay sprite range, for example:
-
-    main:    200..327
-    overlay: 328..455
-
-after verifying those IDs remain unused.
-
-==================================================
-7. ASSERT OVERLAY COUNTS TOO
-==================================================
-
-When that future feature is implemented:
-
-For IDs 328..455 assert:
-
-    128 overlay SPRPOS2 forms
-    128 overlay SPRDISP forms
-
-even if runtime collapses/hides many of them.
-
-Generation structure should still be complete for all rays.
-
-Do not rely on SPROFF in the wall-strip path if trailing SPRDISP revives the
-sprite.
-
-Use the already established collapse mechanism where appropriate:
-
-    SY2 = SY1
-
-==================================================
-8. NO REGEX CLEANUP BY VARIABLE PREFIX
-==================================================
-
-The QH cleanup regression proves this is unsafe.
-
-Do not delete generated lines just because they contain a temporary variable
-name or prefix.
-
-If temporary overlay code must be removed, remove it structurally from the
-generator that emitted it.
-
-Do not sanitize the final BAS with broad textual deletion.
-
-==================================================
-9. KEEP THE HALF-WALL WORK THAT IS NOW PROVEN
-==================================================
-
-Preserve the known-good half-height behaviour:
-
-    HC array
-    per-cell flag
-    WH halving
-    floor-pinned base
-
-Do not return to:
-
-    HC$
-    centered half walls
-    paint-time-only shape capture
-    stale half metadata
-
-Those were real bugs already fixed.
-
-==================================================
-10. BUILD REPORT
-==================================================
-
-Extend ? CHECK / build diagnostics to include:
-
-    MAIN WALL STRIPS
-      expected 128
-      SPRPOS2 128
-      SPRDISP 128
-      missing IDs none
-
-    HALF WALL MODE
-      solid/opaque
-
-    BASIC LINES
-      N / 20000
-
-This should be visible before RUN.
-
-If a strip count fails:
-
-    RUN should not silently continue.
-
-Surface the error clearly.
-
-==================================================
-11. ACCEPTANCE TEST AFTER REVERT
-==================================================
-
-Before any new feature work verify:
-
-A.
-    normal full wall
-    -> renders correctly
-
-B.
-    half wall
-    -> renders at half height
-    -> bottom sits on floor
-    -> all screen columns remain intact
-
-C.
-    rotate through full 360-degree view
-    -> no 28-column missing band
-    -> no translucent vertical streaks
-
-D.
-    final BAS:
-        128 SPRPOS2 for ids 200..327
-        128 SPRDISP for ids 200..327
-
-E.
-    line count comfortably below 20,000 again
-
-Only after all pass mark the renderer stable.
-
-==================================================
-12. ARCHITECTURE RULE GOING FORWARD
-==================================================
-
-Anything that exists once per ray should be generated once per ray.
-
-Do not reconstruct ray structure afterward by pattern-matching final BASIC.
-
-Examples:
-
-    wall strips
-    half-wall overlays
-    future door overlays
-    per-ray diagnostics
-
-belong in the same generator loop / ray emitter.
-
-Generated BASIC should be the OUTPUT of the structure, not the database from
-which we rediscover that structure later.
-
-==================================================
-DO NOT TOUCH
+16. DO NOT TOUCH
 ==================================================
 
 Do not change:
 
 - BSIM/BSPL
-- DDA mathematics
-- WXF/TXC
+- ordinary DDA stepping mathematics
+- ordinary WXF/TXC
 - atlas allocation
 - z ordering
-- half-wall projection that is already working
+- ordinary wall projection
+- enemy sprite architecture
 
 Inline IF only.
-132 chars maximum per line including line number.
-No residual labels.
-Do not rely on SPROFF in the wall-strip block.
+132 characters maximum per BASIC line.
+No residual line labels.
+SPROFF remains unreliable in wall-strip blocks.
 
 ==================================================
 REPORT BACK
@@ -341,12 +456,17 @@ REPORT BACK
 
 Return:
 
-1. confirmation reverted to 68b77521f5e8f266
-2. final line count
-3. SPRPOS2 count for ids 200..327
-4. SPRDISP count for ids 200..327
-5. missing main-strip IDs, if any
-6. half-wall visual test
-7. 360-degree render test
-8. assertion implementation
-9. confirmation transparent overlay is deferred
+1. variables used to remember one half hit
+2. exact DDA insertion point
+3. exact continuation behaviour
+4. overlay sprite range
+5. generated line count
+6. extra executed operations on:
+       ray with no half wall
+       ray with one half wall
+7. main strip assertion result
+8. overlay strip assertion result
+9. scene test result
+10. whether hardware/emulator frame performance changed noticeably
+
+Do not add multi-layer transparent-wall stacks in this pass.
