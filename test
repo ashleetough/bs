@@ -1,0 +1,267 @@
+Unrecognized Content-Security-Policy directive 'webrtc'.
+share-modal.js:1 Uncaught TypeError: Cannot read properties of null (reading 'addEventListener')
+    at share-modal.js:1:135
+(anonymous) @ share-modal.js:1
+setTimeout
+(anonymous) @ share-modal.js:1
+vendor-datadog-Ba3XIL81.js:5 [ARTIFACTS] Received message does not conform to basic message shape, ignoring
+l.<computed> @ vendor-datadog-Ba3XIL81.js:5
+warn @ shared-common-0-D9DF6KVb.js:1
+handleMessage @ shared-10-D1-HOlGb.js:105
+15dqa1a88g540.js:4 [DOOM LAYOUT] DoomPanel root {rectH: 877, clientH: 877, scrollH: 877, overflowY: 'hidden', position: 'absolute', …}
+15dqa1a88g540.js:4 [DOOM LAYOUT] DoomPanel body MISSING
+15dqa1a88g540.js:4 [DOOM ANCESTOR 0] {h: 878, clientH: 877, scrollH: 877, overflowY: 'visible', position: 'relative', …}
+15dqa1a88g540.js:4 [DOOM ANCESTOR 1] {h: 878, clientH: 878, scrollH: 878, overflowY: 'hidden', position: 'relative', …}
+15dqa1a88g540.js:4 [DOOM ANCESTOR 2] {h: 900, clientH: 900, scrollH: 900, overflowY: 'hidden', position: 'static', …}
+15dqa1a88g540.js:4 [DOOM ANCESTOR 3] {h: 936, clientH: 936, scrollH: 936, overflowY: 'hidden', position: 'static', …}
+15dqa1a88g540.js:4 [DOOM ANCESTOR 4] {h: 936, clientH: 936, scrollH: 936, overflowY: 'visible', position: 'static', …}
+15dqa1a88g540.js:4 [DOOM ANCESTOR 5] {h: 936, clientH: 936, scrollH: 936, overflowY: 'visible', position: 'static', …}
+15dqa1a88g540.js:4 [DOOM ANCESTOR 6] {h: 936, clientH: 936, scrollH: 936, overflowY: 'visible', position: 'static', …}
+15dqa1a88g540.js:4 [SPRITE] layout changed — 77 cell(s) moved
+15dqa1a88g540.js:4 [SPRITE] layout changed — 56 cell(s) moved
+15dqa1a88g540.js:4 [SPRITE] layout changed — 31 cell(s) moved
+15dqa1a88g540.js:4 [SPRITE] layout changed — 10 cell(s) moved
+15dqa1a88g540.js:4 [DOOM] wall WV=3: cell at 256,192 on page 1 is EMPTY — placeholder art should have filled it
+rv.globalConsole.<computed> @ 15dqa1a88g540.js:4
+eval @ VM60:34238
+buildDoomBAS @ VM60:34227
+runRaycaster @ VM60:34579
+s1 @ 299ekdt-sjm6b.js:1
+(anonymous) @ 299ekdt-sjm6b.js:1
+tA @ 299ekdt-sjm6b.js:1
+s8 @ 299ekdt-sjm6b.js:1
+fF @ 299ekdt-sjm6b.js:1
+fI @ 299ekdt-sjm6b.js:1
+15dqa1a88g540.js:4 [DOOM] wall WV=4: cell at 320,192 on page 1 is EMPTY — placeholder art should have filled it
+rv.globalConsole.<computed> @ 15dqa1a88g540.js:4
+eval @ VM60:34238
+buildDoomBAS @ VM60:34227
+runRaycaster @ VM60:34579
+s1 @ 299ekdt-sjm6b.js:1
+(anonymous) @ 299ekdt-sjm6b.js:1
+tA @ 299ekdt-sjm6b.js:1
+s8 @ 299ekdt-sjm6b.js:1
+fF @ 299ekdt-sjm6b.js:1
+fI @ 299ekdt-sjm6b.js:1
+15dqa1a88g540.js:4 [DOOM] wall WV=5: cell at 384,192 on page 1 is EMPTY — placeholder art should have filled it
+rv.globalConsole.<computed> @ 15dqa1a88g540.js:4
+eval @ VM60:34238
+buildDoomBAS @ VM60:34227
+runRaycaster @ VM60:34579
+s1 @ 299ekdt-sjm6b.js:1
+(anonymous) @ 299ekdt-sjm6b.js:1
+tA @ 299ekdt-sjm6b.js:1
+s8 @ 299ekdt-sjm6b.js:1
+fF @ 299ekdt-sjm6b.js:1
+fI @ 299ekdt-sjm6b.js:1
+15dqa1a88g540.js:4 [DOOM] 5 SPRTEX line(s) still reference ETR — frame lookup failed, first: 16634     IF EVA<(0-0.5) THEN SPRTEX 1,1,64,ETR,95,ETR+3
+rv.globalConsole.<computed> @ 15dqa1a88g540.js:4
+buildDoomBAS @ VM60:34437
+runRaycaster @ VM60:34579
+s1 @ 299ekdt-sjm6b.js:1
+(anonymous) @ 299ekdt-sjm6b.js:1
+tA @ 299ekdt-sjm6b.js:1
+s8 @ 299ekdt-sjm6b.js:1
+fF @ 299ekdt-sjm6b.js:1
+fI @ 299ekdt-sjm6b.js:1
+15dqa1a88g540.js:4 [DOOM] wall strips emitted: 640
+299ekdt-sjm6b.js:1 Unrecognized Content-Security-Policy directive 'webrtc'.
+iR @ 299ekdt-sjm6b.js:1
+us @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+uo @ 299ekdt-sjm6b.js:1
+uu @ 299ekdt-sjm6b.js:1
+sE @ 299ekdt-sjm6b.js:1
+(anonymous) @ 299ekdt-sjm6b.js:1
+sw @ 299ekdt-sjm6b.js:1
+sl @ 299ekdt-sjm6b.js:1
+sr @ 299ekdt-sjm6b.js:1
+sK @ 299ekdt-sjm6b.js:1
+sH @ 299ekdt-sjm6b.js:1
+sQ @ 299ekdt-sjm6b.js:1
+(anonymous) @ 299ekdt-sjm6b.js:1
+about:srcdoc:1 Unrecognized Content-Security-Policy directive 'webrtc'.
+about:srcdoc:84 [PLY] THREE: true BUILD:051900
+about:srcdoc:91 [PLY run=1] GEOM keys: 0 []
+about:srcdoc:92 [PLY] BAS lines: 16695
+about:srcdoc:1328 [DRAW] id 264 page=1 tx1=256 ty1=192 tx2=256 ty2=255 | sx=256 sy=192 sw=1 sh=64 | dx=273 dy=0 dw=4 dh=821 | img=512x256
+about:srcdoc:1525 [PRE-RENDER] run=1 frame=0 contextLost=false sceneChildren=4 camPos=0,50,200 camRot=-0.24,0.00,0.00 meshes= []
+about:srcdoc:1525 [PRE-RENDER] run=1 frame=1 contextLost=false sceneChildren=4 camPos=0,50,200 camRot=-0.24,0.00,0.00 meshes= []
+about:srcdoc:1525 [PRE-RENDER] run=1 frame=2 contextLost=false sceneChildren=4 camPos=0,50,200 camRot=-0.24,0.00,0.00 meshes= []
+about:srcdoc:1328 [DRAW] id 264 page=1 tx1=256 ty1=192 tx2=256 ty2=255 | sx=256 sy=192 sw=1 sh=64 | dx=273 dy=0 dw=4 dh=821 | img=512x256
+about:srcdoc:1271 [EMUTEX] page1 512x256 complete=true
+about:srcdoc:1282 [EMUTEX] wall cells w1@32:15,16,15a255  w2@96:51,51,51a255  w3@160:49,69,85a255  w4@224:97,96,101a255  w5@288:255,107,107a255
+about:srcdoc:1289 [EMUTEX] distinct wall cells: 5 of 5
+about:srcdoc:1328 [DRAW] id 264 page=1 tx1=256 ty1=192 tx2=256 ty2=255 | sx=256 sy=192 sw=1 sh=64 | dx=273 dy=0 dw=4 dh=821 | img=512x256
+about:srcdoc:1031 [WTX] #1 line 1838  "WTX=128+TXC"  old=277 rhs="128+TXC" -> 161  (WV=1 TXC=33)
+about:srcdoc:1031 [WTX] #2 line 1954  "WTX=128+TXC"  old=161 rhs="128+TXC" -> 165  (WV=1 TXC=37)
+about:srcdoc:1031 [WTX] #3 line 2070  "WTX=128+TXC"  old=165 rhs="128+TXC" -> 168  (WV=1 TXC=40)
+about:srcdoc:1031 [WTX] #4 line 2186  "WTX=128+TXC"  old=168 rhs="128+TXC" -> 171  (WV=1 TXC=43)
+about:srcdoc:1031 [WTX] #5 line 2302  "WTX=128+TXC"  old=171 rhs="128+TXC" -> 174  (WV=1 TXC=46)
+about:srcdoc:1031 [WTX] #6 line 2418  "WTX=128+TXC"  old=174 rhs="128+TXC" -> 178  (WV=1 TXC=50)
+about:srcdoc:1031 [WTX] #7 line 2534  "WTX=128+TXC"  old=178 rhs="128+TXC" -> 182  (WV=1 TXC=54)
+about:srcdoc:1031 [WTX] #8 line 2650  "WTX=128+TXC"  old=182 rhs="128+TXC" -> 185  (WV=1 TXC=57)
+about:srcdoc:1031 [WTX] #9 line 2766  "WTX=128+TXC"  old=185 rhs="128+TXC" -> 189  (WV=1 TXC=61)
+about:srcdoc:1031 [WTX] #10 line 2882  "WTX=128+TXC"  old=189 rhs="128+TXC" -> 129  (WV=5 TXC=1)
+about:srcdoc:1031 [WTX] #11 line 2894  "WTX=384+TXC"  old=129 rhs="384+TXC" -> 385  (WV=5 TXC=1)
+about:srcdoc:1265 [WTX] window closed after 696 writes
+6about:srcdoc:1328 [DRAW] id 264 page=1 tx1=256 ty1=192 tx2=256 ty2=255 | sx=256 sy=192 sw=1 sh=64 | dx=273 dy=0 dw=4 dh=821 | img=512x256
+vendor-datadog-Ba3XIL81.js:5 [COMPLETION] Starting completion request (attempt 1, mode=legacy)
+3about:srcdoc:1328 [DRAW] id 264 page=1 tx1=256 ty1=192 tx2=256 ty2=255 | sx=256 sy=192 sw=1 sh=64 | dx=273 dy=0 dw=4 dh=821 | img=512x256
+about:srcdoc:1328 [DRAW] id 264 page=1 tx1=173 ty1=192 tx2=173 ty2=255 | sx=173 sy=192 sw=1 sh=64 | dx=273 dy=301 dw=4 dh=220 | img=512x256
+vendor-datadog-Ba3XIL81.js:5 [COMPLETION] Completion request succeeded on attempt 1
+about:srcdoc:1328 [DRAW] id 264 page=1 tx1=157 ty1=192 tx2=157 ty2=255 | sx=157 sy=192 sw=1 sh=64 | dx=273 dy=271 dw=4 dh=279 | img=512x256
+about:srcdoc:1328 [DRAW] id 264 page=1 tx1=164 ty1=192 tx2=164 ty2=255 | sx=164 sy=192 sw=1 sh=64 | dx=273 dy=337 dw=4 dh=143 | img=512x256
+about:srcdoc:1328 [DRAW] id 264 page=1 tx1=164 ty1=192 tx2=164 ty2=255 | sx=164 sy=192 sw=1 sh=64 | dx=273 dy=334 dw=4 dh=150 | img=512x256
+about:srcdoc:1544 [PAD fc=360] {"13":20}
+4about:srcdoc:1328 [DRAW] id 264 page=1 tx1=164 ty1=192 tx2=164 ty2=255 | sx=164 sy=192 sw=1 sh=64 | dx=273 dy=323 dw=4 dh=172 | img=512x256
+5about:srcdoc:1328 [DRAW] id 264 page=1 tx1=191 ty1=192 tx2=191 ty2=255 | sx=191 sy=192 sw=1 sh=64 | dx=273 dy=297 dw=4 dh=227 | img=512x256
+about:srcdoc:1204 [STOP] END at line 17690
