@@ -1,374 +1,353 @@
-Handle these as two editor/UX problems first. Do not change the raycaster
-mathematics speculatively.
+Stop changing the half-wall implementation for now.
+
+Six independent fixes have changed real defects without changing the visible
+symptom. The next step is runtime instrumentation, not another hypothesis.
 
 ==================================================
-1. HALF WALLS — VERIFY PAINT STATE BEFORE RUNTIME
+GOAL
 ==================================================
 
-The static runtime chain is already clean:
+Determine what the CENTRE RAY actually sees at runtime.
 
-    halfCells[cell]
-        ->
-    HC$ 196-character string
-        ->
-    HC$(MI2:MI2)
-        ->
-    WH=INT(WH/2)
-        ->
-    SY1/SY2
+We need to measure:
 
-Do NOT rewrite HC$, MI2, WH or projection yet.
+    MI2
+    HC(MI2-1)
+    WH before HALF processing
+    WH after HALF processing
+    SY1
+    SY2
 
-The leading explanation is:
+Do this in the existing debug/readout area if possible.
 
-    HALF is captured when the map cell is painted.
-
-Selecting HALF afterward does not retroactively alter an existing wall.
-
-Prove this in the editor first.
-
-Add a temporary/debug readout for the cell under the cursor or selected cell:
-
-    CELL index
-    map value
-    halfCells[index]
-
-Example:
-
-    CELL 37
-    WALL 2
-    HALF 0
-
-Then:
-
-1. place a wall while FULL is selected
-2. select HALF without clicking wall again
-3. confirm HALF remains 0
-4. click the existing wall with HALF selected
-5. confirm HALF becomes 1
-6. generate BAS and confirm the corresponding HC$ character is 1
-
-If this sequence behaves as above, the renderer is innocent.
+Do NOT change the rendering logic while adding this diagnostic.
 
 ==================================================
-2. MAKE SHAPE APPLY TO EXISTING BLOCK WALLS
+1. INSTRUMENT ONE RAY ONLY
 ==================================================
 
-Yes: clicking an existing BLOCK wall should be able to modify its FULL/HALF
-state.
+Use the centre ray / centre screen column.
 
-The current UX should behave as "place or modify", not "shape only captured
-on first placement".
+Do not add debug work to all 128 rays.
 
-When BLOCK mode is active and a wall cell is clicked:
+At the point immediately AFTER the DDA has completed for the centre ray, capture:
 
-    existing or new wall
-        ->
-    set halfCells[index] = brushHalf
+    hit cell index: MI2
+    half flag:      HC(MI2-1)
+    wall type:      WV
+    distance:       D
 
-Do not require the user to erase and repaint the wall to change its height.
+Then around the existing half-height calculation capture:
 
-If the click also paints a selected wall material/type, preserve the existing
-normal painting behaviour.
+    WH before:
+        HWF=WH
 
-But the important invariant is:
+    existing:
+        WFB=INT(112+WH/2)
+        IF HC(MI2-1)=1 THEN WH=INT(WH/2)
 
-    every successful BLOCK-wall click updates halfCells for that cell.
+    WH after:
+        WH
 
-==================================================
-3. CLEAR HALF METADATA WHEN CELL STOPS BEING A BLOCK
-==================================================
+    final:
+        SY1
+        SY2
 
-When a map cell is changed to FLOOR or another non-block object, clear stale
-block-height metadata:
+Display these values on screen.
 
-    halfCells[index] = false
+Something equivalent to:
 
-Otherwise:
+    MI2 47 HC 1 WV 2
+    WHF 180 WH 90
+    SY1 112 SY2 202
 
-    wall HALF
-    -> erase to floor
-    -> later place another wall
+is sufficient.
 
-could silently resurrect the previous HALF setting.
-
-Likewise RESET / CLEAR MAP should reset halfCells appropriately.
-
-Save/load should continue carrying halfCells.
+Use whatever existing text/debug primitives are already proven.
 
 ==================================================
-4. ADD A VISIBLE HALF-WALL MAP AFFORDANCE
+2. DO NOT ASSUME CELL 46 IS THE RAY HIT
 ==================================================
 
-The map editor should visibly distinguish HALF from FULL blocks.
+The editor/generator has already proven:
 
-For example:
+    halfCells[46] = true
+    HC(46)=1
 
-    FULL wall = normal filled tile
-    HALF wall = same tile colour with a small H marker / inner border /
-                horizontal split indicator
+But that does NOT yet prove the ray looking at the visible wall hits MI2=47.
 
-Do not rely only on the FULL/HALF toolbar button.
+That is what this test must establish.
 
-The user needs to be able to look at the map and see which existing cells have
-the flag.
+Remember:
 
-This also makes the paint-time bug immediately obvious if it ever recurs.
+    HC index = MI2-1
 
-==================================================
-5. DO NOT CHANGE HC$ YET
-==================================================
+Therefore if the centre ray is visibly aimed at the painted HALF cell, the
+runtime diagnostic should eventually show:
 
-The BASIC substring expression:
+    MI2 = 47
+    HC(MI2-1) = 1
 
-    HC$(MI2:MI2)
+If it instead shows another MI2, stop there.
 
-uses the same substring model already used successfully by:
-
-    M$(MI:MI)
-
-and both strings are 196 characters.
-
-There is currently no evidence that HC$ itself is the problem.
-
-Only investigate hardware substring semantics if:
-
-    editor says HALF=1
-    generated HC$ has 1 at correct index
-    final BAS contains the correct test
-    BUT hardware still draws full height.
-
-If that happens, make a tiny isolated EZ-BASIC HC$ test rather than changing
-the raycaster.
+Do not alter HC indexing to compensate until we understand why the ray is
+reporting another cell.
 
 ==================================================
-6. THIN WALL ERASE — ADD EXPLICIT ERASE MODE
+3. INTERPRET THE RESULT MECHANICALLY
 ==================================================
 
-Add an explicit:
+CASE A:
 
-    ERASE
+    MI2 = expected cell
+    HC = 0
 
-brush/mode.
+Then the rendering code is NOT the problem.
 
-It should be visually obvious and live alongside BLOCK / THIN / decoration
-editing.
+The array does not contain the generated value at runtime.
 
-ERASE must operate according to what the cursor actually targets.
+Investigate HC initialization / generated assignment / array behaviour.
 
-If cursor is inside a cell:
+Specifically verify execution reaches:
 
-    clear map cell to FLOOR
-    clear halfCells[index]
-    clear decoration/object occupying that cell if appropriate
+    HC(46)=1
 
-If cursor is near an H/V edge:
+and that reading HC(46) immediately after initialization returns 1.
 
-    clear that exact hEdges/vEdges entry
+Do not change projection.
 
-Do NOT use toggle semantics while ERASE is active.
+--------------------------------------------------
 
-ERASE means:
+CASE B:
 
-    set to empty
+    MI2 != expected cell
 
-never:
+Then the static assumption about MI2/hit-cell correspondence is wrong in the
+actual runtime path.
 
-    empty -> create something
+Inspect exactly where MI2 is assigned relative to:
 
-==================================================
-7. DO NOT MAKE FLOOR DELETE ALL FOUR EDGES
-==================================================
+    DDA stepping
+    wall detection
+    EXIT FOR
+    any door/thin-wall special cases
 
-Do NOT automatically erase every edge surrounding a cell whenever FLOOR is
-painted.
+Do not change DDA mathematics.
 
-Thin walls live on shared boundaries.
+We only want to establish which variable actually retains the accepted hit
+cell.
 
-For example:
+--------------------------------------------------
 
-    cell A | thin wall | cell B
+CASE C:
 
-Painting FLOOR into cell A should not necessarily destroy a wall that the user
-intended as the boundary of cell B / corridor geometry.
+    MI2 correct
+    HC = 1
+    WHF e.g. 180
+    WH e.g. 90
 
-That would make FLOOR destructive beyond the clicked cell and could become
-very surprising.
+Then HALF processing is definitely executing.
 
-Keep the concepts distinct:
+Now inspect:
 
-    FLOOR = cell contents
-    ERASE = explicit destructive editing tool
-    THIN = edge geometry
+    SY1
+    SY2
 
-==================================================
-8. OPTIONAL FLOOR CONVENIENCE
-==================================================
+They must reflect the shortened WH.
 
-If desired, FLOOR may clear edge geometry ONLY when the click itself is in the
-edge hit-zone.
+If they do, HC and WH are innocent.
 
-But a centre-cell FLOOR click should not wipe all neighbouring edges.
+--------------------------------------------------
 
-The explicit ERASE mode should be the canonical way to remove arbitrary
+CASE D:
+
+    HC = 1
+    WH halves
+    SY1/SY2 are correct
+    BUT wall remains visually full-height
+
+This is extremely important.
+
+At that point STOP investigating HC entirely.
+
+It proves the problem is downstream of projection.
+
+Then audit the FINAL GENERATED BAS for the centre wall strip and determine
+whether the actual visible sprite is the sprite whose:
+
+    SPRPOS2 ...,SY1,...,SY2,...
+
+we are modifying.
+
+Search for every write to that sprite ID:
+
+    SPRTEX
+    SPRPAL
+    SPRPOS
+    SPRPOS2
+    SPRDISP
+    SPROFF
+
+and determine whether another command later in the frame restores/replaces its
 geometry.
 
-==================================================
-9. MAKE EDGE TARGETING LESS FIDDLY
-==================================================
+Also verify there isn't a second wall-rendering layer underneath the textured
+strip making the supposedly shortened region appear filled.
 
-Current EDGE_HIT is approximately 4px in a 16px cell.
-
-When:
-
-    THIN mode
-or
-    ERASE mode
-
-is active, widen the edge hit region because the user's intent is specifically
-to interact with boundaries.
-
-For example, increase the hit tolerance enough that selecting an edge feels
-deliberate but does not make corners ambiguous.
-
-If a click falls near a corner where both H and V are candidates, choose the
-nearest edge geometrically rather than toggling both.
+Do not infer this from the template.
+Inspect FINAL GENERATED BAS.
 
 ==================================================
-10. ERASE VISUAL FEEDBACK
+4. TEST HC ARRAY DIRECTLY
 ==================================================
 
-When hovering in ERASE mode, highlight exactly what will be deleted:
+Because multiple arrays are a remaining unknown, add one cheap diagnostic
+outside the raycaster after initialization:
 
-    cell
-or
-    horizontal edge
-or
-    vertical edge
-or
-    decoration
+    HC(46)
 
-This is much better than forcing the user to guess which 4px hit zone they are
-inside.
+It should display/read as:
 
-The existing problem is partly discoverability, not only data mutation.
+    1
 
-==================================================
-11. KEEP THIN EDGE TOGGLE AS A SHORTCUT
-==================================================
+This separates:
 
-The existing THIN behaviour:
+    generator emitted HC(46)=1
 
-    click empty edge -> create
-    click occupied edge -> remove
+from:
 
-can stay.
+    interpreter actually stored HC(46)=1
 
-It is a useful quick toggle.
-
-But ERASE provides an unambiguous second route for removing an edge.
-
-Do not remove the existing working toggle merely because ERASE exists.
+If HC(46)=0 immediately after initialization, we have found the failure before
+the raycaster even begins.
 
 ==================================================
-12. ACCEPTANCE TESTS
+5. DO NOT JUMP TO "THREE ARRAYS ARE UNSUPPORTED"
 ==================================================
 
-HALF TEST:
+Current arrays include:
 
-A.
-    select WALL 1 + FULL
-    click empty cell
-    -> full wall
+    DR(0 TO 195)
+    ZB(0 TO 127)
+    HC(0 TO 195)
 
-B.
-    select HALF
-    click SAME existing wall
-    -> map indicator changes to HALF
-    -> halfCells[index] = true
-    -> generated HC$ bit = 1
-    -> RUN renders half height
+We do NOT have evidence that EZ-BASIC limits the number of arrays this way.
 
-C.
-    select FULL
-    click same wall
-    -> bit becomes 0
-    -> wall returns full height
+Do not redesign storage based on that possibility.
 
-D.
-    erase/floor cell
-    -> halfCells[index] cleared
+Measure:
 
-E.
-    repaint wall
-    -> does not inherit stale half flag unless HALF is currently selected
+    HC(46)
 
+first.
 
-THIN ERASE TEST:
+If it reads 1, the multiple-array theory is eliminated immediately.
 
-A.
-    create horizontal thin edge
-    -> visible
-
-B.
-    ERASE hover edge
-    -> exact edge highlighted
-
-C.
-    click
-    -> edge becomes zero
-
-D.
-    repeat for vertical edge
-
-E.
-    create thin edge between two floor cells
-    paint FLOOR in one cell centre
-    -> edge remains
-
-F.
-    use ERASE on edge
-    -> edge disappears
-
-G.
-    erase block with HALF flag
-    -> cell floor + HALF flag cleared
+If it reads 0, isolate array behaviour with the smallest possible diagnostic
+before changing the game architecture.
 
 ==================================================
-13. DO NOT TOUCH
+6. CHECK THE GENERATED INITIALIZATION ORDER
+==================================================
+
+Inspect FINAL BAS and report the exact ordering of:
+
+    DIM HC(...)
+    HC zeroing FOR/NEXT
+    HC(46)=1
+    game/raycast loop
+
+Make absolutely sure the emitted:
+
+    HC(46)=1
+
+occurs AFTER:
+
+    FOR DI=0 TO 195
+      HC(DI)=0
+    NEXT DI
+
+and that the zeroing loop is not executed again later.
+
+This is worth checking because the source text containing HC(46)=1 is not
+enough if initialization order wipes it afterward.
+
+==================================================
+7. IMPORTANT: DO NOT CHANGE THESE
 ==================================================
 
 Do not change:
 
-- BSIM/BSPL
-- DDA
+- BSIM/BSPL writers
+- DDA mathematics
 - WXF/TXC
-- wall projection
 - atlas allocation
 - z ordering
-- wall-strip SPROFF behaviour
+- half-wall indexing
+- projection formula
+- HC storage representation
+- sprite IDs
+
+Do not add another proposed "fix".
+
+This build is now a measurement build.
 
 Inline IF only.
-
-Do not reintroduce regex substitution for HC$.
-The plain literal string replacement is already the safer path.
+132 characters maximum INCLUDING line number.
+No block IF.
+Do not use SPROFF for wall-strip hiding.
 
 ==================================================
-REPORT BACK
+8. REPORT THE ACTUAL NUMBERS
 ==================================================
 
-Return:
+Return the observed centre-ray values, not just "looks correct":
 
-1. result of FULL -> select HALF without repainting
-2. result after clicking existing wall with HALF
-3. HC$ bit before/after
-4. RUN result
-5. exact editor rule implemented for existing block clicks
-6. stale halfCells clearing rules
-7. ERASE behaviour for cells
-8. ERASE behaviour for H/V edges
-9. edge-hit tolerance change
-10. acceptance-test results
+    expected halfCells index =
+    HC(expected index) after initialization =
 
-Inspect current code first and continue through independent editor-side work
-without stopping after every subtask.
+    MI2 =
+    MI2-1 =
+    HC(MI2-1) =
+    WV =
+    D =
+
+    WH before =
+    WH after =
+    WFB =
+    SY1 =
+    SY2 =
+
+Also provide the exact final generated BASIC lines for:
+
+    DIM HC
+    HC zeroing
+    HC(46)=1
+
+and the centre-ray HALF/projection/SPRP0S2 block.
+
+==================================================
+DECISION POINT
+==================================================
+
+Do not proceed to another fix until those values are known.
+
+The diagnostic should tell us which boundary contains the failure:
+
+    generated state
+        ↓
+    runtime HC storage
+        ↓
+    DDA hit identity
+        ↓
+    HALF branch
+        ↓
+    WH
+        ↓
+    SY1/SY2
+        ↓
+    actual visible sprite
+
+We have already spent six fixes reasoning across that entire chain.
+
+Now locate the exact boundary experimentally.
