@@ -1,353 +1,352 @@
-Stop changing the half-wall implementation for now.
-
-Six independent fixes have changed real defects without changing the visible
-symptom. The next step is runtime instrumentation, not another hypothesis.
+Recover stability first. Do not continue from the currently broken renderer.
 
 ==================================================
-GOAL
+1. REVERT TO THE LAST KNOWN-GOOD BUILD
 ==================================================
 
-Determine what the CENTRE RAY actually sees at runtime.
+Return to:
 
-We need to measure:
+    68b77521f5e8f266
 
-    MI2
-    HC(MI2-1)
-    WH before HALF processing
-    WH after HALF processing
-    SY1
-    SY2
+That is the current trusted baseline.
 
-Do this in the existing debug/readout area if possible.
+Known behaviour there:
 
-Do NOT change the rendering logic while adding this diagnostic.
+- all 128 wall strips render
+- half-wall flag works
+- half walls render at half height
+- half-wall base stays on the floor
+- no transparent overlay exists
+- half walls still occlude geometry behind them
 
-==================================================
-1. INSTRUMENT ONE RAY ONLY
-==================================================
+That occlusion is acceptable for now.
 
-Use the centre ray / centre screen column.
+Do NOT try to salvage the current partial-overlay build.
 
-Do not add debug work to all 128 rays.
-
-At the point immediately AFTER the DDA has completed for the centre ray, capture:
-
-    hit cell index: MI2
-    half flag:      HC(MI2-1)
-    wall type:      WV
-    distance:       D
-
-Then around the existing half-height calculation capture:
-
-    WH before:
-        HWF=WH
-
-    existing:
-        WFB=INT(112+WH/2)
-        IF HC(MI2-1)=1 THEN WH=INT(WH/2)
-
-    WH after:
-        WH
-
-    final:
-        SY1
-        SY2
-
-Display these values on screen.
-
-Something equivalent to:
-
-    MI2 47 HC 1 WV 2
-    WHF 180 WH 90
-    SY1 112 SY2 202
-
-is sufficient.
-
-Use whatever existing text/debug primitives are already proven.
+The current build has 28 wall strips missing SPRPOS2 / SPRDISP, so it is not a
+valid debugging baseline.
 
 ==================================================
-2. DO NOT ASSUME CELL 46 IS THE RAY HIT
+2. ADD HARD STRIP-COUNT ASSERTIONS IMMEDIATELY
 ==================================================
 
-The editor/generator has already proven:
+Before any further feature work, add structural assertions to the FINAL
+generated BASIC.
 
-    halfCells[46] = true
-    HC(46)=1
+For main wall-strip sprite IDs:
 
-But that does NOT yet prove the ray looking at the visible wall hits MI2=47.
+    200..327
 
-That is what this test must establish.
+there must be exactly:
 
-Remember:
+    128 SPRPOS2 commands
+    128 SPRDISP commands
 
-    HC index = MI2-1
+and ideally one expected texture-selection block per ID.
 
-Therefore if the centre ray is visibly aimed at the painted HALF cell, the
-runtime diagnostic should eventually show:
+Do not use a loose regex such as:
 
-    MI2 = 47
-    HC(MI2-1) = 1
+    SPRDISP 2\d\d
 
-If it instead shows another MI2, stop there.
+because that matches only 200..299 and misses 300..327.
 
-Do not alter HC indexing to compensate until we understand why the ray is
-reporting another cell.
+Parse the numeric sprite ID and check the range semantically:
 
-==================================================
-3. INTERPRET THE RESULT MECHANICALLY
-==================================================
+    id >= 200 && id <= 327
 
-CASE A:
+For every ID 200..327 assert individually:
 
-    MI2 = expected cell
-    HC = 0
+    SPRPOS2 <id> exists exactly once in the wall-render block
+    SPRDISP <id> exists exactly once
 
-Then the rendering code is NOT the problem.
+Then assert totals:
 
-The array does not contain the generated value at runtime.
+    main wall strips = 128
 
-Investigate HC initialization / generated assignment / array behaviour.
+Fail the build loudly if any ID is missing.
 
-Specifically verify execution reaches:
-
-    HC(46)=1
-
-and that reading HC(46) immediately after initialization returns 1.
-
-Do not change projection.
-
---------------------------------------------------
-
-CASE B:
-
-    MI2 != expected cell
-
-Then the static assumption about MI2/hit-cell correspondence is wrong in the
-actual runtime path.
-
-Inspect exactly where MI2 is assigned relative to:
-
-    DDA stepping
-    wall detection
-    EXIT FOR
-    any door/thin-wall special cases
-
-Do not change DDA mathematics.
-
-We only want to establish which variable actually retains the accepted hit
-cell.
-
---------------------------------------------------
-
-CASE C:
-
-    MI2 correct
-    HC = 1
-    WHF e.g. 180
-    WH e.g. 90
-
-Then HALF processing is definitely executing.
-
-Now inspect:
-
-    SY1
-    SY2
-
-They must reflect the shortened WH.
-
-If they do, HC and WH are innocent.
-
---------------------------------------------------
-
-CASE D:
-
-    HC = 1
-    WH halves
-    SY1/SY2 are correct
-    BUT wall remains visually full-height
-
-This is extremely important.
-
-At that point STOP investigating HC entirely.
-
-It proves the problem is downstream of projection.
-
-Then audit the FINAL GENERATED BAS for the centre wall strip and determine
-whether the actual visible sprite is the sprite whose:
-
-    SPRPOS2 ...,SY1,...,SY2,...
-
-we are modifying.
-
-Search for every write to that sprite ID:
-
-    SPRTEX
-    SPRPAL
-    SPRPOS
-    SPRPOS2
-    SPRDISP
-    SPROFF
-
-and determine whether another command later in the frame restores/replaces its
-geometry.
-
-Also verify there isn't a second wall-rendering layer underneath the textured
-strip making the supposedly shortened region appear filled.
-
-Do not infer this from the template.
-Inspect FINAL GENERATED BAS.
+Report the exact missing IDs.
 
 ==================================================
-4. TEST HC ARRAY DIRECTLY
+3. ADD A "DO NOT DAMAGE MAIN STRIPS" INVARIANT
 ==================================================
 
-Because multiple arrays are a remaining unknown, add one cheap diagnostic
-outside the raycaster after initialization:
+No later generator transform should be allowed to delete or rewrite arbitrary
+main wall lines based on substring matching.
 
-    HC(46)
+Especially forbid cleanup patterns shaped like:
 
-It should display/read as:
+    remove every line containing QH...
+    replace every SPRDISP 2...
 
-    1
+unless the transform first proves the exact intended match set.
 
-This separates:
+For any transformation intended to touch 128 rays:
 
-    generator emitted HC(46)=1
+    expected matches = 128
 
-from:
+If actual != expected:
 
-    interpreter actually stored HC(46)=1
+    abort transformation
+    console.error
+    keep original BAS unchanged
 
-If HC(46)=0 immediately after initialization, we have found the failure before
-the raycaster even begins.
-
-==================================================
-5. DO NOT JUMP TO "THREE ARRAYS ARE UNSUPPORTED"
-==================================================
-
-Current arrays include:
-
-    DR(0 TO 195)
-    ZB(0 TO 127)
-    HC(0 TO 195)
-
-We do NOT have evidence that EZ-BASIC limits the number of arrays this way.
-
-Do not redesign storage based on that possibility.
-
-Measure:
-
-    HC(46)
-
-first.
-
-If it reads 1, the multiple-array theory is eliminated immediately.
-
-If it reads 0, isolate array behaviour with the smallest possible diagnostic
-before changing the game architecture.
+Never proceed with a partial 100/128 transformation.
 
 ==================================================
-6. CHECK THE GENERATED INITIALIZATION ORDER
+4. KEEP HALF WALLS SOLID FOR NOW
 ==================================================
 
-Inspect FINAL BAS and report the exact ordering of:
+Do NOT implement transparent half-wall continuation in this recovery build.
 
-    DIM HC(...)
-    HC zeroing FOR/NEXT
-    HC(46)=1
-    game/raycast loop
+Current design constraint:
 
-Make absolutely sure the emitted:
+    HALF WALL = shorter opaque wall
 
-    HC(46)=1
+Therefore:
 
-occurs AFTER:
+- its visible height is half
+- it blocks ray continuation
+- things behind it are occluded
 
-    FOR DI=0 TO 195
-      HC(DI)=0
-    NEXT DI
+Treat that as a documented engine limitation for now, not a bug.
 
-and that the zeroing loop is not executed again later.
+This gives us:
 
-This is worth checking because the source text containing HC(46)=1 is not
-enough if initialization order wipes it afterward.
+    correctness
+    lower interpreted cost
+    lower BASIC line count
+    fewer sprite primitives
+    simpler Z behaviour
+
+Do not spend the remaining line budget solving it yet.
 
 ==================================================
-7. IMPORTANT: DO NOT CHANGE THESE
+5. WHY THE OVERLAY IS DEFERRED
+==================================================
+
+The transparent-half-wall architecture itself is valid:
+
+    DDA encounters half wall
+    remember hit
+    continue ray
+    find far wall
+    render far wall
+    render half wall over it at nearer depth
+
+But it has meaningful cost:
+
+- extra DDA work
+- extra per-ray state
+- extra wall-strip sprites
+- additional generated BASIC
+- more render work in the current bottleneck
+
+The failed implementation reached approximately:
+
+    19,024 / 20,000 lines
+
+That is too close to the source limit for a feature that can wait.
+
+Do not optimise around that limit yet.
+
+==================================================
+6. IF TRANSPARENT HALF WALLS RETURN LATER
+==================================================
+
+Build them INSIDE the ray/strip generator.
+
+Do not add them by searching generated BASIC afterward.
+
+The generator already knows:
+
+    ray index
+    main strip sprite ID
+    screen X
+    projection variables
+
+For each of the 128 rays, generate together:
+
+    MAIN STRIP
+    optional HALF OVERLAY STRIP
+
+By construction this guarantees:
+
+    128 main strips
+    128 overlay opportunities
+
+No regex discovery pass is required.
+
+Use a deterministic overlay sprite range, for example:
+
+    main:    200..327
+    overlay: 328..455
+
+after verifying those IDs remain unused.
+
+==================================================
+7. ASSERT OVERLAY COUNTS TOO
+==================================================
+
+When that future feature is implemented:
+
+For IDs 328..455 assert:
+
+    128 overlay SPRPOS2 forms
+    128 overlay SPRDISP forms
+
+even if runtime collapses/hides many of them.
+
+Generation structure should still be complete for all rays.
+
+Do not rely on SPROFF in the wall-strip path if trailing SPRDISP revives the
+sprite.
+
+Use the already established collapse mechanism where appropriate:
+
+    SY2 = SY1
+
+==================================================
+8. NO REGEX CLEANUP BY VARIABLE PREFIX
+==================================================
+
+The QH cleanup regression proves this is unsafe.
+
+Do not delete generated lines just because they contain a temporary variable
+name or prefix.
+
+If temporary overlay code must be removed, remove it structurally from the
+generator that emitted it.
+
+Do not sanitize the final BAS with broad textual deletion.
+
+==================================================
+9. KEEP THE HALF-WALL WORK THAT IS NOW PROVEN
+==================================================
+
+Preserve the known-good half-height behaviour:
+
+    HC array
+    per-cell flag
+    WH halving
+    floor-pinned base
+
+Do not return to:
+
+    HC$
+    centered half walls
+    paint-time-only shape capture
+    stale half metadata
+
+Those were real bugs already fixed.
+
+==================================================
+10. BUILD REPORT
+==================================================
+
+Extend ? CHECK / build diagnostics to include:
+
+    MAIN WALL STRIPS
+      expected 128
+      SPRPOS2 128
+      SPRDISP 128
+      missing IDs none
+
+    HALF WALL MODE
+      solid/opaque
+
+    BASIC LINES
+      N / 20000
+
+This should be visible before RUN.
+
+If a strip count fails:
+
+    RUN should not silently continue.
+
+Surface the error clearly.
+
+==================================================
+11. ACCEPTANCE TEST AFTER REVERT
+==================================================
+
+Before any new feature work verify:
+
+A.
+    normal full wall
+    -> renders correctly
+
+B.
+    half wall
+    -> renders at half height
+    -> bottom sits on floor
+    -> all screen columns remain intact
+
+C.
+    rotate through full 360-degree view
+    -> no 28-column missing band
+    -> no translucent vertical streaks
+
+D.
+    final BAS:
+        128 SPRPOS2 for ids 200..327
+        128 SPRDISP for ids 200..327
+
+E.
+    line count comfortably below 20,000 again
+
+Only after all pass mark the renderer stable.
+
+==================================================
+12. ARCHITECTURE RULE GOING FORWARD
+==================================================
+
+Anything that exists once per ray should be generated once per ray.
+
+Do not reconstruct ray structure afterward by pattern-matching final BASIC.
+
+Examples:
+
+    wall strips
+    half-wall overlays
+    future door overlays
+    per-ray diagnostics
+
+belong in the same generator loop / ray emitter.
+
+Generated BASIC should be the OUTPUT of the structure, not the database from
+which we rediscover that structure later.
+
+==================================================
+DO NOT TOUCH
 ==================================================
 
 Do not change:
 
-- BSIM/BSPL writers
+- BSIM/BSPL
 - DDA mathematics
 - WXF/TXC
 - atlas allocation
 - z ordering
-- half-wall indexing
-- projection formula
-- HC storage representation
-- sprite IDs
-
-Do not add another proposed "fix".
-
-This build is now a measurement build.
+- half-wall projection that is already working
 
 Inline IF only.
-132 characters maximum INCLUDING line number.
-No block IF.
-Do not use SPROFF for wall-strip hiding.
+132 chars maximum per line including line number.
+No residual labels.
+Do not rely on SPROFF in the wall-strip block.
 
 ==================================================
-8. REPORT THE ACTUAL NUMBERS
+REPORT BACK
 ==================================================
 
-Return the observed centre-ray values, not just "looks correct":
+Return:
 
-    expected halfCells index =
-    HC(expected index) after initialization =
-
-    MI2 =
-    MI2-1 =
-    HC(MI2-1) =
-    WV =
-    D =
-
-    WH before =
-    WH after =
-    WFB =
-    SY1 =
-    SY2 =
-
-Also provide the exact final generated BASIC lines for:
-
-    DIM HC
-    HC zeroing
-    HC(46)=1
-
-and the centre-ray HALF/projection/SPRP0S2 block.
-
-==================================================
-DECISION POINT
-==================================================
-
-Do not proceed to another fix until those values are known.
-
-The diagnostic should tell us which boundary contains the failure:
-
-    generated state
-        ↓
-    runtime HC storage
-        ↓
-    DDA hit identity
-        ↓
-    HALF branch
-        ↓
-    WH
-        ↓
-    SY1/SY2
-        ↓
-    actual visible sprite
-
-We have already spent six fixes reasoning across that entire chain.
-
-Now locate the exact boundary experimentally.
+1. confirmation reverted to 68b77521f5e8f266
+2. final line count
+3. SPRPOS2 count for ids 200..327
+4. SPRDISP count for ids 200..327
+5. missing main-strip IDs, if any
+6. half-wall visual test
+7. 360-degree render test
+8. assertion implementation
+9. confirmation transparent overlay is deferred
