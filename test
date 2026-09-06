@@ -1,346 +1,335 @@
-The screenshots now make the likely geometry bug much clearer.
+ROOT CAUSE FOUND. Do not debug palette, renderer, atlas composition, or sprite
+IDs.
 
-Do NOT modify SID/DFR pairing.
-
-The current pairing is standard DDA and matches the known-working wall path:
-
-    SID=0:
-        distance = SDX-DDX
-        fractional coordinate = PY + D*RY
-
-    SID=1:
-        distance = SDY-DDY
-        fractional coordinate = PX + D*RX
-
-So this:
-
-    IF WV=5 THEN DDT=SDX-DDX
-    IF WV=5 AND SID=1 THEN DDT=SDY-DDY
-    IF WV=5 AND SID=0 THEN DFR=PY+DDT*RY
-    IF WV=5 AND SID=1 THEN DFR=PX+DDT*RX
-
-is correct in axis pairing.
-
-Do not cross those variables.
+The pickup generator has TWO coordinate-resolution paths, and the one that
+actually emits SPRTEX is stale.
 
 ==================================================
-LIKELY ROOT CAUSE: TWO DIFFERENT GEOMETRIC MODELS
+PROVEN CURRENT ART
 ==================================================
 
-The CLOSED door and the OPENING door are not conceptually the same geometry.
+? TEX reports:
 
-CLOSED:
+    ammo:idle
+        page 1
+        x320..383
+        y128..191
+        raw alpha 1886
+        composed alpha 1886
+        PAINTED
 
-    The door is currently treated exactly like a solid grid wall.
+    health:idle
+        page 1
+        x384..447
+        y128..191
+        raw alpha 1046
+        composed alpha 1046
+        PAINTED
 
-    DDA crosses the near boundary of the door cell.
-    That boundary distance is DDT.
-    Rendering there is correct for the existing closed-door visual.
-
-OPENING / OPEN:
-
-    The sliding panels are supposed to represent an object INSIDE the doorway.
-
-    If they are still rendered at the DDA ENTRY boundary, then their world
-    position depends on which side the ray entered the cell from.
-
-Approach from one direction:
-
-    cell near boundary = side A
-
-Approach from opposite direction:
-
-    cell near boundary = side B
-
-Those boundaries are one full map cell apart.
-
-This matches the user's exact symptom:
-
-    from one side the opening door sits at the front of its cell
-    from the other it appears displaced toward the neighbouring block.
+So the atlas/composer is correct.
 
 ==================================================
-WHY THE PREVIOUS 0.5 OFFSET "FIX" BROKE CLOSED DOORS
+ACTUAL BUG
 ==================================================
 
-The attempted change:
+pickupBAS correctly does:
 
-    IF WV=5 AND SID=0 THEN D=D+DDX*0.5
-    IF WV=5 AND SID=1 THEN D=D+DDY*0.5
+    const _pc = findCell(
+        atlasLayout,
+        p.cell === '6' ? 'ammo' : 'health',
+        'idle'
+    );
 
-was applied to ALL door rendering.
+    const _pr = _pc
+        ? cellToRect(_pc, SPRITE_SIZE)
+        : null;
 
-That moved the CLOSED door away from its already-correct wall boundary and
-halfway into the cell.
+BUT the actual one-time pickupInit ignores _pr and still emits hardcoded old
+32px atlas coordinates:
 
-So the closed door became visibly recessed.
+    const pickupInit = pickups.map((p, n) => {
+      const s = 6 + n;
+      const tex = p.cell === '6'
+        ? `SPRTEX ${s},1,128,0,159,31`
+        : `SPRTEX ${s},1,160,0,191,31`;
+      return ` ${tex}\n SPRPAL ${s},1,0,1`;
+    }).join('\n');
 
-That does NOT prove the half-cell concept was wrong.
+Those coordinates are stale.
 
-It proves:
+They sample:
 
-    CLOSED door must remain boundary-aligned.
+    ammo:
+        p1 x128..159 y0..31
 
-The sliding panel may need a different depth only once it begins opening.
+    health:
+        p1 x160..191 y0..31
 
-==================================================
-TEST THIS NARROWLY
-==================================================
+instead of the actual 64x64 cells:
 
-Do NOT immediately ship another global offset.
+    ammo:
+        p1 x320..383 y128..191
 
-First expose two values for a centre ray hitting the door:
+    health:
+        p1 x384..447 y128..191
 
-    DB = boundary distance
-    DC = candidate centre distance
-
-where:
-
-    DB = DDT
-
-    if SID=0:
-        DC = DDT + DDX*0.5
-
-    if SID=1:
-        DC = DDT + DDY*0.5
-
-Show DB/DC while looking at the SAME door from both sides.
-
-The key property to verify:
-
-    the reconstructed world point at DC should refer to the SAME physical
-    centre of the door cell regardless of which side it is approached from.
-
-This is the reason for adding half a DDA cell:
-DDX/DDY are the ray-parameter distance required to traverse one map cell on
-that axis.
-
-Do not judge this from screen appearance alone.
+This exactly explains the visible hollow/transparent little square.
 
 ==================================================
-THEN DO A GATED VISUAL TEST
+FIX
 ==================================================
 
-If the centre-distance check passes, use:
+Make pickupInit use the SAME canonical atlas resolution as every other sprite.
 
-    DRV=0
-        -> existing boundary depth
+Do not hardcode any page/x/y coordinates.
 
-    DRV>0
-        -> centre depth for the sliding-panel representation
+For every pickup:
 
-IMPORTANT:
+    const id = p.cell === '6' ? 'ammo' : 'health';
+    const c = findCell(atlasLayout, id, 'idle');
 
-Do this ONLY for the door panel overlay / opening-door geometry.
+If no cell exists:
 
-Do not mutate the ordinary final wall D used by the rest of the renderer.
+    log a clear build error
+    do not emit a stale fallback texture
 
-Use a separate variable such as:
+If it exists:
 
-    DPD = door panel distance
+    const r = cellToRect(c, SPRITE_SIZE);
+
+emit:
+
+    SPRTEX s,r.page,r.x,r.y,r.x2,r.y2
+    SPRPAL s,1,0,1
 
 Conceptually:
 
-    DPD=DDT
-    IF DRV>0 AND SID=0 THEN DPD=DDT+DDX*0.5
-    IF DRV>0 AND SID=1 THEN DPD=DDT+DDY*0.5
+    const pickupInit = pickups.map((p, n) => {
+      const s = 6 + n;
+      const id = p.cell === '6' ? 'ammo' : 'health';
+      const c = findCell(atlasLayout, id, 'idle');
 
-Then calculate the DOOR PANEL projected height/position from DPD.
+      if (!c) {
+        console.error('[DOOM] no atlas cell for', id,
+                      '— pickup sprite disabled');
+        return ` SPROFF ${s}`;
+      }
 
-Do not overwrite D if D is also carrying the final/background wall distance.
+      const r = cellToRect(c, SPRITE_SIZE);
 
-This distinction matters especially now that open-door rays may continue
-through the door to background geometry.
+      return [
+        ` SPRTEX ${s},${r.page},${r.x},${r.y},${r.x2},${r.y2}`,
+        ` SPRPAL ${s},1,0,1`
+      ].join('\n');
+    }).join('\n');
 
-==================================================
-BETTER STILL: MAKE THE TRANSITION CONTINUOUS
-==================================================
-
-A hard:
-
-    DRV=0 -> boundary
-    DRV>0 -> centre
-
-could make the panel pop backward by half a cell on the first animation frame.
-
-Once the basic test proves the geometry, consider interpolating the panel
-plane into the cell as it begins opening:
-
-    amount = DRV / 8
-
-and use some fraction of the half-cell offset.
-
-BUT do not implement this yet.
-
-First prove:
-
-    boundary position gives side-dependent open panels
-    centre position gives side-independent open panels.
-
-Once that is established we can decide whether a transition is visually
-needed.
+Use the project's actual rect property names if they are currently x/y/x2/y2
+or x/y/y2 etc. Inspect cellToRect first rather than assuming.
 
 ==================================================
-DDI IS A SEPARATE ISSUE
+REMOVE THE DUPLICATED LOOKUP
 ==================================================
 
-Audit DDI, but do NOT conflate it with depth.
+Right now pickupBAS resolves _pc/_pr but does not use _pr for texture setup.
 
-DDI determines:
+Do not leave two independent pickup texture lookups again.
 
-    which direction / half the panel retracts toward
+Prefer one canonical helper, for example:
 
-It does NOT determine:
+    resolvePickupRect(p)
 
-    the projected depth of the door plane
+or resolve the rect once per pickup while constructing the pickup descriptors.
 
-Therefore a bad DDI can cause:
+Then BOTH:
 
-    left panel opens right instead of left
-    paired panels retract toward each other incorrectly
-    horizontal double doors work but vertical pairs do not
+    pickupBAS
+    pickupInit
 
-It cannot by itself explain:
+consume that resolved object.
 
-    entire door plane is one cell nearer from one approach direction.
+Example intermediate structure:
 
-==================================================
-BUT THERE IS A REAL DDI DESIGN FLAW TO CHECK
-==================================================
+    pickupsResolved = pickups.map((p,n) => ({
+        ...p,
+        spriteId: 6+n,
+        resourceId: p.cell === '6' ? 'ammo' : 'health',
+        rect: ...
+    }))
 
-If DDI is initialised only from:
+Then use:
 
-    "is the cell to my LEFT also a door?"
+    pickupResolved.rect
 
-then it only understands a horizontal double-door pair.
+everywhere.
 
-That is not sufficient if double doors may be arranged vertically.
+The important invariant:
 
-Determine door orientation from MAP ADJACENCY, not from ray approach.
+    semantic resource
+        ->
+    findCell
+        ->
+    cellToRect
+        ->
+    ALL generated SPRTEX commands
 
-For each door cell, derive something like:
-
-    partner on left/right  -> horizontal pair
-    partner above/below    -> vertical pair
-    no partner             -> single door
-
-Then assign the two paired cells opposite retract directions.
-
-The orientation should NOT change because the camera approaches from another
-side.
-
-A physical door has one layout orientation in the map.
-
-So:
-
-    DDI should depend on door pairing/map topology
-    SID should depend on ray intersection
-
-Do not use SID to redefine which physical half of a double door the cell is.
-
-That would make the same door change identity when viewed from another angle.
+No duplicate hardcoded atlas knowledge.
 
 ==================================================
-IMPORTANT DISTINCTION
+DO NOT KEEP THE OLD FALLBACK
 ==================================================
 
-There are TWO axes in play:
+Do not fall back to:
 
-1. RAY HIT AXIS
-       SID
-       tells us which grid boundary the ray crossed.
+    128,0,159,31
 
-2. DOOR PAIR / SLIDE AXIS
-       derived from map arrangement
-       tells us where the physical door panel retracts.
+or:
 
-They are not interchangeable.
+    160,0,191,31
 
-A door can be viewed from arbitrary directions without changing its own slide
-orientation.
+Those are obsolete 32px coordinates and hide layout failures.
 
-==================================================
-CHECK THE CURRENT DOUBLE-DOOR INIT
-==================================================
+If resolution fails:
 
-Report exactly how DDI is initialised.
+    fail loudly
+    or disable that sprite
 
-For the door shown in the screenshots, report:
-
-    door cell row/column
-    adjacent cells:
-        left
-        right
-        above
-        below
-
-    chosen pair orientation
-    chosen DDI
-
-Do the same for its partner.
-
-Expected for a pair:
-
-    same orientation
-    opposite slide direction
-
-If both cells receive the same DDI, or vertical pairs are inferred using only
-left adjacency, fix that independently.
+Never silently sample some unrelated atlas region.
 
 ==================================================
-DO NOT CHANGE ORDINARY WALLS
+ADD A FINAL GENERATED-BASIC ASSERTION
 ==================================================
 
-Do not alter:
+We got caught by exactly the same class of bug as the wall strips:
+the source-level resolver looked correct, but nobody inspected the FINAL
+generated SPRTEX.
 
-- ordinary D
-- WXF/TXC
-- normal wall projection
-- DDA stepping
+Add a semantic pickup assertion after final generation.
+
+For every generated pickup sprite, know:
+
+    sprite id
+    expected page
+    expected x1/y1/x2/y2
+
+Then assert that final BAS contains exactly the expected:
+
+    SPRTEX <id>,<page>,<x1>,<y1>,<x2>,<y2>
+
+For the current state this should include, assuming these are the first two
+pickups:
+
+    ammo:
+        SPRTEX 6,1,320,128,383,191
+
+    health:
+        SPRTEX 7,1,384,128,447,191
+
+If map order gives them different sprite IDs, use those actual IDs.
+
+Do not assert merely that:
+
+    SPRTEX 6
+
+exists.
+
+Assert the complete rect.
+
+Also add a stale-coordinate assertion that fails if final generated pickup
+setup contains the known obsolete forms:
+
+    ,1,128,0,159,31
+    ,1,160,0,191,31
+
+==================================================
+SPRPAL
+==================================================
+
+Do NOT change SPRPAL.
+
+Current:
+
+    SPRPAL s,1,0,1
+
+matches the normal palette usage for other correctly rendered sprites.
+
+There is no evidence of a palette-offset problem.
+
+The wrong source rectangle fully explains the symptom.
+
+==================================================
+SPRITE IDS
+==================================================
+
+No collision is evident.
+
+Current allocation:
+
+    enemies     1..5
+    pickups     6..13   (MAX_PICKUPS 8)
+    gun         20
+    walls       200..327
+
+The recent enemy map-slot allocation fix does not make enemy sprite IDs expand
+beyond 1..5.
+
+Do not change IDs.
+
+Optionally add a build-time allocation assertion so these ranges can never
+silently overlap later.
+
+==================================================
+DUMP BAS
+==================================================
+
+The BAS dump is still useful as verification, but we do NOT need to wait for it
+to identify the cause now.
+
+Before shipping the fix, inspect the final generated pickup lines and report
+them.
+
+For current ammo/health art expected approximately:
+
+    SPRTEX <ammo sprite>,1,320,128,383,191
+    SPRPAL <ammo sprite>,1,0,1
+
+    SPRTEX <health sprite>,1,384,128,447,191
+    SPRPAL <health sprite>,1,0,1
+
+==================================================
+DO NOT TOUCH
+==================================================
+
+Do not modify:
+
 - BSIM/BSPL
-- atlas
+- palette writer
+- atlas layout
+- buildTexturePages
+- painter
+- DDA
+- WXF/TXC
+- wall projection
 - z ordering
+- pickup projection maths
+- pickup sprite IDs
 
-Use separate door variables.
-
-The closed door path is already visually correct and should remain the control.
-
-==================================================
-PROPOSED DIAGNOSTIC ORDER
-==================================================
-
-1. Verify SID/DDT/DFR pairing against ordinary wall formula.
-   Expected: PASS.
-
-2. Measure candidate door-centre depth from both sides.
-
-3. Temporarily render OPENING door panels at centre depth only.
-
-4. Confirm:
-       closed door unchanged
-       opening panel no longer jumps between cell boundaries.
-
-5. Separately audit DDI/map pairing.
-
-Do not combine steps 3 and 5 into one build.
-
-We need to know whether depth and slide direction are independently correct.
+This is a stale generated SPRTEX-coordinate bug.
 
 ==================================================
-REPORT
+REPORT BACK
 ==================================================
 
 Return:
 
-1. SID pairing verdict
-2. DDT from side A
-3. candidate centre depth from side A
-4. DDT from side B
-5. candidate centre depth from side B
-6. result of OPENING-ONLY centre-depth rendering
-7. closed-door result
-8. current DDI initialisation code
-9. door neighbour topology
-10. whether DDI is wrong independently of depth
+1. exact old pickupInit code removed
+2. canonical replacement used
+3. final generated ammo SPRTEX
+4. final generated health SPRTEX
+5. confirmation SPRPAL unchanged
+6. stale-coordinate assertion result
+7. sprite-ID collision assertion/result
+8. final BASIC line count
 
-Do not apply another global door offset.
+Then test RUN.
+
+Do not make adjacent pickup rendering changes in the same build.
