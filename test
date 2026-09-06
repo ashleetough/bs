@@ -1,454 +1,373 @@
-Proceed with the see-through half-wall renderer.
+ROOT CAUSE OF THIN-WALL WARP IS NOW DERIVED.
 
-The architecture in HALF_WALL_SEE_THROUGH.md is approved, with ONE important
-scope limit:
+Do not change D, TXC, WXF, wall projection, or DDA stepping.
 
-    support ONE remembered half-wall hit per ray initially.
+The hEdges/vEdges packing is correct.
 
-Do not implement an arbitrary transparent-wall stack yet.
-
-==================================================
-TARGET BEHAVIOUR
-==================================================
-
-A HALF wall should:
-
-- render at half height
-- remain physically/raycast nearer than the wall behind it
-- allow the ray to continue above it
-- show the full wall/room behind
-- allow enemies/pickups behind it to remain visible if they are nearer than
-  the far opaque wall
-
-Known visual limitation:
-
-- enemies are whole SPRPOS2 rectangles
-- they cannot be clipped at the half-wall top
-- therefore an enemy behind a half wall will render fully rather than being
-  hidden below the waist
-
-Accept this limitation.
-
-Do NOT attempt a column-based enemy renderer.
+The bug is that the edge lookup uses the ENTERED cell without compensating for
+the DDA step direction.
 
 ==================================================
-1. START FROM THE VERIFIED BASELINE
+EDGE STORAGE CONVENTION
 ==================================================
 
-Current known state:
+The editor/source defines:
 
-    build   76fe4f2c275c2e96
-    strips  128/128 verified
-    lines   16,802 / 20,000
+    hEdges[row][col]
+        = SOUTH edge of cell row,col
+        = boundary between row and row+1
 
-Do not reintroduce the broken regex/post-processing overlay attempt.
+    vEdges[row][col]
+        = EAST edge of cell row,col
+        = boundary between col and col+1
 
-Keep the existing strip-count assertion.
+Packing:
 
-Before implementation confirm final BAS still reports:
+    H: 13 rows x 14 cols
+       index = row*14 + col
 
-    main wall strips 200..327:
-        SPRPOS2 128/128
-        SPRDISP 128/128
+    V: 14 rows x 13 cols
+       index = row*13 + col
 
-==================================================
-2. GENERATE THE OVERLAY INSIDE THE RAY EMITTER
-==================================================
-
-Do NOT search generated BASIC for SPRDISP/SPRTEX lines afterward.
-
-Anything that exists once per ray must be emitted by the same generator code
-that emits that ray's main wall strip.
-
-For ray index:
-
-    n = 0..127
-
-use:
-
-    main wall strip = 200+n
-    half overlay    = 328+n
-
-after confirming 328..455 remain unused.
-
-The main and overlay strip structure must be generated together by
-construction.
+That part is correct and must not be changed.
 
 ==================================================
-3. DDA BEHAVIOUR
+WHAT DDA MX/MY MEAN
 ==================================================
 
-Add one remembered-half state for the CURRENT ray.
+The DDA does:
 
-Conceptually initialise:
-
-    halfSeen = 0
-
-During DDA:
-
-    advance normally
-    inspect current map cell
-
-If cell is a normal/full opaque wall:
-
-    stop exactly as today
-
-If cell is HALF:
-
-    if halfSeen = 0:
-        remember this half-wall hit
-
-    then treat it as transparent for continuation:
-        WV = 0 / equivalent non-hit path
-        continue DDA
-
-Do NOT alter the existing DDA stepping mathematics.
-
-Do NOT let a half wall terminate the ray.
-
-==================================================
-4. REMEMBER ONLY WHAT THE OVERLAY NEEDS
-==================================================
-
-For the first HALF hit remember enough information to reconstruct its wall
-strip after the DDA finishes.
-
-At minimum likely:
-
-    halfSeen
-    half distance
-    half wall type / WV
-    half SID
-    half map-cell index
-    half fractional hit coordinate or enough data to derive it
-
-Do not overwrite the normal final-wall variables.
-
-Use separate half-wall variables.
-
-The final ordinary hit must still populate the existing:
-
-    D
-    WV
-    SID
-    WXF
-    TXC
-    WH
-    SY1
-    SY2
-
-path unchanged.
-
-==================================================
-5. COMPUTE HALF TXC INDEPENDENTLY
-==================================================
-
-The remembered half wall needs its own texture X coordinate.
-
-At the half-wall encounter, either:
-
-A. compute and store the fractional coordinate immediately
-
+    MX = MX + SIX
 or
+    MY = MY + SIY
 
-B. store half distance/SID and derive it after the loop
+BEFORE performing the edge lookup.
 
-using the same verified wall mathematics:
+Therefore MX/MY represent the cell the ray has JUST ENTERED.
+
+But the physical boundary just crossed is not always stored against that cell.
+
+It depends on step sign.
+
+==================================================
+SID=0 — VERTICAL BOUNDARY / vEdges
+==================================================
+
+SID=0 means MX changed.
+
+Current:
+
+    EI=MY*13+MX+1
+
+Interpretation:
+    vEdges[MY][MX]
+
+This is correct only for SIX=-1.
+
+CASE SIX=-1:
+
+    old cell: col MX+1
+    new cell: col MX
+
+The ray crossed the WEST boundary of the old cell.
+
+That is the EAST edge of the NEW cell:
+
+    vEdges[MY][MX]
+
+So current lookup is correct.
+
+CASE SIX=+1:
+
+    old cell: col MX-1
+    new cell: col MX
+
+The ray crossed the EAST edge of the OLD cell:
+
+    vEdges[MY][MX-1]
+
+Current lookup instead asks for:
+
+    vEdges[MY][MX]
+
+which is one boundary too far right.
+
+==================================================
+SID=1 — HORIZONTAL BOUNDARY / hEdges
+==================================================
+
+SID=1 means MY changed.
+
+Current:
+
+    EI=MY*14+MX+1
+
+Interpretation:
+    hEdges[MY][MX]
+
+This is correct only for SIY=-1.
+
+CASE SIY=-1:
+
+    old row: MY+1
+    new row: MY
+
+The ray crossed the NORTH boundary of the old cell.
+
+That is the SOUTH edge of the NEW cell:
+
+    hEdges[MY][MX]
+
+Current lookup is correct.
+
+CASE SIY=+1:
+
+    old row: MY-1
+    new row: MY
+
+The ray crossed the SOUTH edge of the OLD cell:
+
+    hEdges[MY-1][MX]
+
+Current lookup instead asks for:
+
+    hEdges[MY][MX]
+
+which is one boundary too far down.
+
+==================================================
+MINIMAL FIX
+==================================================
+
+Preserve the existing 1-based string indexing.
+
+A minimally invasive form is:
+
+    EI=0
+
+    IF WV=0 AND SID=1 THEN EI=MY*14+MX+1
+    IF WV=0 AND SID=1 AND SIY=1 THEN EI=EI-14
+
+    IF WV=0 AND SID=0 THEN EI=MY*13+MX+1
+    IF WV=0 AND SID=0 AND SIX=1 THEN EI=EI-1
+
+Then existing:
+
+    IF EI<1 THEN EI=1
+    IF EI>182 THEN EI=1
+    IF WV=0 AND SID=1 AND HW$(EI:EI)="1" THEN WV=8
+    IF WV=0 AND SID=0 AND VW$(EI:EI)="1" THEN WV=8
+
+can remain.
+
+This gives:
+
+VERTICAL:
+    SIX=-1 -> MY*13+MX+1
+    SIX=+1 -> MY*13+MX
+
+HORIZONTAL:
+    SIY=-1 -> MY*14+MX+1
+    SIY=+1 -> (MY-1)*14+MX+1
+
+which exactly matches the editor's east/south ownership convention.
+
+==================================================
+DO NOT "FIX" THE STRIDES
+==================================================
+
+Do not change:
+
+    horizontal stride 14
+    vertical stride 13
+
+They are correct.
+
+The handoff already disproved the stride theory:
+
+    HW = 13*14 = 182
+    VW = 14*13 = 182
+
+Reader and writer agree.
+
+==================================================
+DO NOT CHANGE DISTANCE
+==================================================
+
+Once the correct edge is identified, the existing wall distance is already the
+distance to the boundary just crossed:
 
     SID=0:
-        frac = PY + halfD*RY
+        D=SDX-DDX
 
     SID=1:
-        frac = PX + halfD*RX
+        D=SDY-DDY
 
-    frac = frac - INT(frac)
+That is exactly where an edge wall physically lives.
 
-Then:
+Do NOT add:
 
-    halfTXC = INT(frac*64)
+    half-cell offsets
+    +/- DDX
+    +/- DDY
 
-Apply the existing face-flip convention if the ordinary wall renderer already
-uses one.
+to compensate for the lookup error.
 
-Do NOT reuse the final far-wall TXC.
-
-==================================================
-6. RENDER ORDER
-==================================================
-
-After DDA:
-
-FIRST:
-    render the ordinary FAR wall using existing strip 200+n.
-
-SECOND:
-    if halfSeen:
-        render the HALF wall using overlay strip 328+n.
-
-The half overlay uses:
-
-    remembered half depth
-    remembered half wall texture
-    remembered half TXC
-
-and projected HALF height.
-
-The half wall base remains floor-pinned using the already proven behaviour.
-
-Conceptually:
-
-    full projected half-wall height at halfD
-        ->
-    divide world height by 2
-        ->
-    keep bottom at floor
-        ->
-    lower top
-
-Do not return to centred/floating half walls.
+That would turn an indexing bug into a geometry bug.
 
 ==================================================
-7. OVERLAY ABSENCE
+DO NOT CHANGE TXC
 ==================================================
 
-When no half wall was encountered for a ray, the overlay sprite must collapse
-reliably.
+Likewise, after the correct edge becomes WV=8:
 
-Do NOT rely on SPROFF if the wall-strip block later executes SPRDISP.
+    IF SID=0 THEN WXF=PY+D*RY
+    ELSE WXF=PX+D*RX
 
-Use the established zero-height mechanism:
+is the normal coordinate along the boundary.
 
-    overlaySY2 = overlaySY1
+Do not change WXF/TXC unless the wall remains texture-warped AFTER the lookup
+fix.
 
-or equivalent proven collapse.
-
-The overlay strip may remain SPRDISP-enabled structurally for every ray.
-
-==================================================
-8. DEPTH BUFFER SEMANTICS
-==================================================
-
-Keep ZB storing the FAR opaque-wall distance.
-
-This is intentional.
-
-It means an enemy/pickup behind the half wall but in front of the far wall:
-
-    object distance < ZB
-
-and therefore remains drawable.
-
-Do NOT replace ZB with the half-wall distance.
-
-Doing that would restore the exact occlusion problem we are trying to remove.
-
-Known consequence:
-
-    enemy is drawn as a whole rectangle
-    not clipped at half-wall height
-
-Accept it.
+First fix which physical edge is being hit.
 
 ==================================================
-9. SPRITE DRAW ORDER
+CONTROLLED TEST
 ==================================================
 
-Preserve existing known ordering unless measurement shows a problem.
+Before testing a complex map, create ONE isolated vertical thin wall separating
+two empty cells.
 
-Expected visual compromise:
+Approach it:
 
-    far wall
-    half-wall overlay
-    enemy may draw fully over half wall because it cannot be vertically clipped
+    west -> east
+    east -> west
 
-Do not try to solve that by putting the half overlay in front of every enemy,
-because that would hide the enemy's entire lower AND upper rectangle.
+Expected after fix:
 
-The correct partial occlusion cannot be expressed with one rectangular enemy
-sprite.
+    same physical boundary from both directions
+    same apparent depth
+    no one-cell jump
 
-Document this limitation rather than introducing wrong z behaviour.
+Then create ONE isolated horizontal edge.
 
-==================================================
-10. ONE HALF WALL PER RAY
-==================================================
+Approach:
 
-For this version:
+    north -> south
+    south -> north
 
-    remember only the FIRST half wall encountered.
+Expected:
 
-If the ray passes through another half wall later:
-
-    do not create a stack
-    continue toward the final opaque wall
-
-This avoids:
-
-- arrays/stacks of transparent hits
-- reverse sorting
-- multiple extra sprites per ray
-- large source-line growth
-
-Document:
-
-    one visible half-wall layer per ray
-
-as the current engine limit.
-
-This can be expanded later only if real level design requires it.
+    same physical boundary from both directions.
 
 ==================================================
-11. PERFORMANCE
+ADD TEMPORARY EDGE DEBUG
 ==================================================
 
-The attached estimate is roughly:
+For the centre ray only, optionally display:
 
-    +4 executed statements per DDA step
-    +~10 generated lines per ray
-    +128 possible overlay sprites
+    SID
+    SIX
+    SIY
+    MX
+    MY
+    EI
+    WV
 
-This is substantial.
+For a single vertical edge, the EI value must be IDENTICAL when that same
+physical edge is approached from both sides.
 
-Before finalising, record:
+Likewise for a horizontal edge.
 
-    baseline generated line count
-    new generated line count
-    extra executed DDA operations
+This is the strongest acceptance test.
 
-Try to make the no-half-wall path as cheap as possible.
+Example conceptual vertical edge:
 
-Do NOT add repeated expensive half-wall coordinate arithmetic inside every DDA
-step if it can be deferred until a half wall is actually encountered.
+    west approach:
+        SID 0
+        SIX 1
+        adjusted EI N
 
-Prefer:
+    east approach:
+        SID 0
+        SIX -1
+        EI N
 
-    cheap cell/flag test every step
-    detailed half-hit calculation only on encounter
+Same N.
 
-==================================================
-12. HARD LINE LIMIT
-==================================================
-
-20,000 BASIC lines remains absolute.
-
-If implementation approaches the limit too closely, do NOT remove assertions
-or working correctness checks to make it fit.
-
-Report the line pressure.
-
-We can choose optimisation or postpone the feature rather than silently ship a
-fragile ~19,900-line build.
-
-Target meaningful safety headroom if possible.
+If those differ, do not touch rendering geometry — the edge lookup is still
+wrong.
 
 ==================================================
-13. ASSERTIONS
+CHECK BOUNDS SEMANTICS
 ==================================================
 
-Final BAS must assert:
+The current:
 
-MAIN:
-    ids 200..327
-    128 SPRPOS2
-    128 SPRDISP
-    no missing ids
+    IF EI<1 THEN EI=1
+    IF EI>182 THEN EI=1
 
-HALF OVERLAY:
-    ids 328..455
-    128 SPRPOS2 forms
-    128 SPRDISP forms
-    no missing ids
+is questionable as a defensive fallback because an invalid lookup silently
+becomes edge 1.
 
-Do not accept total-count-only assertions.
+Do NOT change it as part of this bug fix unless necessary.
 
-Check every individual id so a duplicate cannot hide a missing strip.
+But after the directional fix, add a temporary assertion/debug warning when EI
+falls outside 1..182.
 
-Also assert no overlap between:
+Later we should probably treat invalid EI as "no edge" rather than aliasing
+edge 1.
 
-    enemy ids
-    pickup ids
-    gun id
-    main wall strip ids
-    overlay ids
+Keep that as separate cleanup.
 
 ==================================================
-14. NEVER POST-PROCESS BY LOOSE TEXT MATCHING
+IMPORTANT SECONDARY LIMIT
 ==================================================
 
-Do not repeat either failed approach:
+Current thin-edge lookup runs only when:
 
-    SPRDISP 2\d\d
+    WV=0
 
-or broad cleanup such as:
+That means an edge sitting on the boundary of a non-empty map cell may not be
+considered because ordinary cell geometry wins first.
 
-    delete lines containing QH...
+Do not expand that semantic in this fix.
 
-The first silently covered only 200..299.
-The second deleted legitimate main-strip code.
+For the controlled test use empty cells on both sides.
 
-Emit structurally.
-
-If generated code must later be modified, use explicit markers owned by the
-ray emitter or a structured intermediate representation.
-
-Do not rediscover ray structure from rendered BASIC text.
+Once directional lookup is proven, decide separately whether thin edges should
+be allowed to coexist with solid map cells.
 
 ==================================================
-15. ACCEPTANCE TEST
+STRIP ASSERTION
 ==================================================
 
-Create a simple scene:
+Keep the existing permanent renderer assertion:
 
-    player
-        ->
-    HALF WALL
-        ->
-    enemy/pickup
-        ->
-    FULL WALL
+    SPRPOS2 200..327 = 128/128
+    SPRDISP 200..327 = 128/128
 
-Verify:
-
-A. HALF wall is half height and floor-pinned.
-
-B. FULL wall behind is visible in the upper half.
-
-C. Enemy/pickup behind remains visible.
-
-D. Enemy may visually overlap the half wall rather than clip at its waist.
-   This is expected.
-
-E. Removing the half wall produces the same far-wall projection as before.
-
-F. Replacing HALF with FULL makes it opaque again.
-
-G. Rotate through the entire scene:
-       no missing 28-column band
-       no translucent garbage strips
-       no stale overlay columns.
-
-H. ? CHECK:
-       main 128/128
-       overlay 128/128
+Do not reintroduce generated-text cleanup or overlay work while fixing thin
+walls.
 
 ==================================================
-16. DO NOT TOUCH
+DO NOT TOUCH
 ==================================================
 
 Do not change:
 
 - BSIM/BSPL
-- ordinary DDA stepping mathematics
+- DDA stepping mathematics
+- DDX/DDY
+- SDX/SDY
 - ordinary WXF/TXC
+- wall projection
 - atlas allocation
 - z ordering
-- ordinary wall projection
-- enemy sprite architecture
+- wall strip generation
+- sprite IDs
 
-Inline IF only.
-132 characters maximum per BASIC line.
-No residual line labels.
-SPROFF remains unreliable in wall-strip blocks.
+This is an edge-owner/index-selection bug.
 
 ==================================================
 REPORT BACK
@@ -456,17 +375,14 @@ REPORT BACK
 
 Return:
 
-1. variables used to remember one half hit
-2. exact DDA insertion point
-3. exact continuation behaviour
-4. overlay sprite range
-5. generated line count
-6. extra executed operations on:
-       ray with no half wall
-       ray with one half wall
-7. main strip assertion result
-8. overlay strip assertion result
-9. scene test result
-10. whether hardware/emulator frame performance changed noticeably
+1. exact old EI equations
+2. exact new EI equations
+3. vertical edge EI from west
+4. same edge EI from east
+5. horizontal edge EI from north
+6. same edge EI from south
+7. visual result from both sides
+8. strip assertion result
+9. final line count
 
-Do not add multi-layer transparent-wall stacks in this pass.
+Do not make adjacent renderer changes in the same build.
