@@ -1,504 +1,346 @@
-The screenshots materially change the diagnosis.
+The screenshots now make the likely geometry bug much clearer.
 
-DO NOT describe this as "zero textures" or a total texture-pipeline failure.
+Do NOT modify SID/DFR pairing.
 
-The RUN screenshot visibly contains red/grey patterned wall textures.
+The current pairing is standard DDA and matches the known-working wall path:
 
-Those are the generated wall PLACEHOLDERS.
+    SID=0:
+        distance = SDX-DDX
+        fractional coordinate = PY + D*RY
 
-Therefore these stages are demonstrably alive:
+    SID=1:
+        distance = SDY-DDY
+        fractional coordinate = PX + D*RX
 
-    buildDoomBAS completes
-    runRaycaster completes
-    buildTexturePages completes
-    page -> PNG/data URL encoding completes
-    _PS_TEXTURES reaches the emulator
-    SPRTEX/drawImage is rendering texture data
+So this:
 
-So a diagnostic throwing inside buildDoomBAS is NOT the leading explanation.
+    IF WV=5 THEN DDT=SDX-DDX
+    IF WV=5 AND SID=1 THEN DDT=SDY-DDY
+    IF WV=5 AND SID=0 THEN DFR=PY+DDT*RY
+    IF WV=5 AND SID=1 THEN DFR=PX+DDT*RX
 
-Do not revert the last two diagnostic commits merely because they are new.
+is correct in axis pairing.
 
-==================================================
-IMPORTANT CODE FACT: SINGLE-PAGE SHEET IMPORT
-==================================================
-
-Inspect the current importSheet().
-
-For a 512x256 upload:
-
-    nPages = 1
-
-It creates:
-
-    out.page1
-
-then does:
-
-    setSpritePages(p => ({...p, ...out}))
-
-Therefore a page-1 upload:
-
-    REPLACES page1
-    PRESERVES existing page2/page3/page4
-
-It does NOT clear the whole atlas.
-
-So "uploading page 1 deleted all texture pages" is disproved by the current
-implementation.
-
-Do not change this until runtime state says otherwise.
+Do not cross those variables.
 
 ==================================================
-WHAT THE SCREENSHOT ACTUALLY SUGGESTS
+LIKELY ROOT CAUSE: TWO DIFFERENT GEOMETRIC MODELS
 ==================================================
 
-The painter shows the user's Baron art.
+The CLOSED door and the OPENING door are not conceptually the same geometry.
 
-The RUN shows generated placeholder textures.
+CLOSED:
 
-That means the useful question is now:
+    The door is currently treated exactly like a solid grid wall.
 
-    Why does buildTexturePages consider the CURRENT game cells unpainted
-    even though the painter shows user art?
+    DDA crosses the near boundary of the door cell.
+    That boundary distance is DDT.
+    Rendering there is correct for the existing closed-door visual.
 
-This is a provenance/layout problem until proven otherwise.
+OPENING / OPEN:
 
-Remember buildTexturePages does:
+    The sliding panels are supposed to represent an object INSIDE the doorway.
 
-    start with raw spritePages
-    for each CURRENT atlasLayout cell:
-        resolve cellToRect
-        inspect alpha in that exact rect
-        if painted:
-            leave user pixels
-        else:
-            insert placeholder
+    If they are still rendered at the DDA ENTRY boundary, then their world
+    position depends on which side the ray entered the cell from.
 
-So if a semantic frame moved but the old pixels remain elsewhere on the page:
+Approach from one direction:
 
-    painter sheet may visibly contain artwork
-    BUT current semantic cell may be empty
-    -> placeholder gets composed
-    -> RUN shows placeholder
+    cell near boundary = side A
 
-That is exactly the class of problem already discovered after the animation
-layout changed.
+Approach from opposite direction:
 
-==================================================
-DO NOT TRUST "I CAN SEE IT ON THE SHEET"
-==================================================
+    cell near boundary = side B
 
-A pixel being visible somewhere in the navigator is NOT proof that:
+Those boundaries are one full map cell apart.
 
-    enemy1:front1
+This matches the user's exact symptom:
 
-currently owns those pixels.
-
-The current allocator is semantic:
-
-    resource id + frame
-        ->
-    atlasLayout cell
-        ->
-    cellToRect
-        ->
-    page/x/y
-
-Measure that exact rectangle.
+    from one side the opening door sits at the front of its cell
+    from the other it appears displaced toward the neighbouring block.
 
 ==================================================
-ADD ONE "TEXTURE PROVENANCE" REPORT
+WHY THE PREVIOUS 0.5 OFFSET "FIX" BROKE CLOSED DOORS
 ==================================================
 
-Do not add more BASIC instrumentation.
+The attempted change:
 
-Add a browser-side diagnostic:
+    IF WV=5 AND SID=0 THEN D=D+DDX*0.5
+    IF WV=5 AND SID=1 THEN D=D+DDY*0.5
 
-    ? TEX
+was applied to ALL door rendering.
 
-It should inspect the exact state that RUN is about to use.
+That moved the CLOSED door away from its already-correct wall boundary and
+halfway into the cell.
 
-For EVERY live/wired resource cell, print:
+So the closed door became visibly recessed.
 
-    semantic key
-    current page
-    current rect
-    raw spritePages alpha count
-    composed-page alpha count
-    source = PAINTED or PLACEHOLDER
+That does NOT prove the half-cell concept was wrong.
 
-Example:
+It proves:
 
-    enemy1:front1
-      p1 x0 y0
-      raw alpha 1842
-      composed alpha 1842
-      PAINTED
+    CLOSED door must remain boundary-aligned.
 
-    enemy1:front2
-      p1 x64 y0
-      raw alpha 1760
-      composed alpha 1760
-      PAINTED
-
-    wall1:idle
-      p4 x...
-      raw alpha 0
-      composed alpha 4096
-      PLACEHOLDER
-
-This report must use:
-
-    CURRENT atlasLayout
-    cellToRect()
-    CURRENT spritePages
-    buildTexturePages()
-
-Do NOT recompute positions with row*size or another independent formula.
+The sliding panel may need a different depth only once it begins opening.
 
 ==================================================
-REPORT THESE SPECIFIC CELLS FIRST
+TEST THIS NARROWLY
 ==================================================
 
-For the resource currently used by enemy slot 1, report:
+Do NOT immediately ship another global offset.
 
-    enemy1:front1
-    enemy1:front2
-    enemy1:front3
-    enemy1:side1
-    enemy1:hurt1
+First expose two values for a centre ray hitting the door:
 
-Then:
+    DB = boundary distance
+    DC = candidate centre distance
 
-    wall1:idle
-    wall2:idle
-    wall3:idle
-    wall4:idle
-    door:idle
-    gun:idle
+where:
 
-For each, give:
+    DB = DDT
 
-    page
-    x/y
-    nontransparent raw pixels
-    placeholder yes/no
+    if SID=0:
+        DC = DDT + DDX*0.5
 
-This should explain the screenshot immediately.
+    if SID=1:
+        DC = DDT + DDY*0.5
 
-==================================================
-COMPARE PAINTER SELECTION AGAINST CURRENT LAYOUT
-==================================================
+Show DB/DC while looking at the SAME door from both sides.
 
-While FRONT1 is selected in the painter, display:
+The key property to verify:
 
-    selected semantic key
-    selected atlas page
-    selected x/y
+    the reconstructed world point at DC should refer to the SAME physical
+    centre of the door cell regardless of which side it is approached from.
 
-Example:
+This is the reason for adding half a DDA cell:
+DDX/DDY are the ray-parameter distance required to traverse one map cell on
+that axis.
 
-    enemy1:front1
-    PAGE 1
-    X 0 Y 0
-
-Then confirm the Baron pixels actually occupy THAT rectangle.
-
-Do the same for FRONT2 and FRONT3.
-
-Do not merely look at thumbnails.
-
-If the thumbnails are reading an old coordinate or a different resource,
-we need to know.
+Do not judge this from screen appearance alone.
 
 ==================================================
-THERE IS STILL MULTI-PAGE POSITIONAL CODE TO AUDIT
+THEN DO A GATED VISUAL TEST
 ==================================================
 
-I inspected the current JSX and some slot operations still calculate destination
-coordinates directly from:
+If the centre-distance check passes, use:
 
-    sl.row * SPRITE_SIZE
-    sl.col * SPRITE_SIZE
+    DRV=0
+        -> existing boundary depth
 
-rather than using cellToRect()'s LOCAL page row/y.
+    DRV>0
+        -> centre depth for the sliding-panel representation
 
-Examples include crop/import/clear-style code paths.
+IMPORTANT:
 
-That is dangerous for any slot whose global row is >= rowsPerPage.
+Do this ONLY for the door panel overlay / opening-door geometry.
 
-The painter's main origin was fixed to:
+Do not mutate the ordinary final wall D used by the rest of the renderer.
 
-    cellToRect(slotDef)
+Use a separate variable such as:
 
-but not every write path has necessarily been converted.
+    DPD = door panel distance
 
-Audit EVERY spritePages write operation and classify it:
+Conceptually:
 
-    SAFE:
-        uses pageKey from cellToRect
-        AND x/y from the SAME cellToRect
+    DPD=DDT
+    IF DRV>0 AND SID=0 THEN DPD=DDT+DDX*0.5
+    IF DRV>0 AND SID=1 THEN DPD=DDT+DDY*0.5
 
-    BROKEN FOR MULTIPAGE:
-        pageKey is page N
-        but pixel offset uses global sl.row*SPRITE_SIZE
+Then calculate the DOOR PANEL projected height/position from DPD.
 
-For a page-2 cell, this can become:
+Do not overwrite D if D is also carrying the final/background wall distance.
 
-    page2 buffer
-    y = 256+
-
-which writes outside the logical 256px page.
-
-Specifically audit:
-
-    draw brush
-    erase
-    clearSlot
-    commitCropWhole
-    commitCrop
-    pasteSlot
-    duplicateToNext
-    shift/nudge
-    centre
-    fill selection
-    sheet import
-    undo/redo
-
-Do NOT blindly patch all of them first.
-
-Report which ones mix:
-
-    page-aware buffer
-with
-    global row coordinates.
-
-This is highly relevant because the page-key fix changed one half of this
-relationship.
+This distinction matters especially now that open-door rays may continue
+through the door to background geometry.
 
 ==================================================
-VERY IMPORTANT DISTINCTION
+BETTER STILL: MAKE THE TRANSITION CONTINUOUS
 ==================================================
 
-The page-key fix may itself have EXPOSED previously hidden bad coordinate math.
+A hard:
 
-Before:
+    DRV=0 -> boundary
+    DRV>0 -> centre
 
-    wrong page + global coordinates
+could make the panel pop backward by half a cell on the first animation frame.
 
-could accidentally look internally consistent in the painter.
+Once the basic test proves the geometry, consider interpolating the panel
+plane into the cell as it begins opening:
 
-After:
+    amount = DRV / 8
 
-    correct page + stale global row coordinates
+and use some fraction of the half-cell offset.
 
-can write off-page.
+BUT do not implement this yet.
 
-That would explain why the behavioural change appeared around the page-key fix
-without meaning the page-key idea itself was wrong.
+First prove:
 
-The invariant must be:
+    boundary position gives side-dependent open panels
+    centre position gives side-independent open panels.
 
-    page, x, y
-
-ALL come from the SAME cellToRect(cell).
-
-Never:
-
-    page from cellToRect
-    y from cell.row * size
+Once that is established we can decide whether a transition is visually
+needed.
 
 ==================================================
-CHECK importSheet SEMANTICS
+DDI IS A SEPARATE ISSUE
 ==================================================
 
-The current one-page upload intentionally preserves later pages:
+Audit DDI, but do NOT conflate it with depth.
 
-    setSpritePages(p => ({...p, ...out}))
+DDI determines:
 
-Keep that behaviour for now.
+    which direction / half the panel retracts toward
 
-But add a toast/report saying explicitly:
+It does NOT determine:
 
-    Imported page1 only; pages 2-4 preserved
+    the projected depth of the door plane
 
-when nPages=1 and later pages already exist.
+Therefore a bad DDI can cause:
 
-The existing wording "Sheet loaded — 1 page" can easily make the user think
-the whole atlas now contains one page.
+    left panel opens right instead of left
+    paired panels retract toward each other incorrectly
+    horizontal double doors work but vertical pairs do not
 
-Also report:
+It cannot by itself explain:
 
-    raw pages after import:
-    page1 yes
-    page2 yes
-    page3 yes
-    page4 yes
-
-No guessing.
+    entire door plane is one cell nearer from one approach direction.
 
 ==================================================
-CHECK THE RUN COMPOSITION DIRECTLY
+BUT THERE IS A REAL DDI DESIGN FLAW TO CHECK
 ==================================================
 
-Immediately before assigning _PS_TEXTURES, report:
+If DDI is initialised only from:
 
-    buildTexturePages pages present
-    placeholders inserted
+    "is the cell to my LEFT also a door?"
 
-Example:
+then it only understands a horizontal double-door pair.
 
-    RUN TEX:
-      page1 yes
-      page2 yes
-      page3 yes
-      page4 yes
-      placeholders 17
+That is not sufficient if double doors may be arranged vertically.
 
-This is nearly free because runRaycaster already calls buildTexturePages.
+Determine door orientation from MAP ADJACENCY, not from ray approach.
 
-If all four pages exist, the page-1 upload did not destroy anything globally.
+For each door cell, derive something like:
 
-==================================================
-THE FALSE WALL WARNINGS SHOULD BE FIXED
-==================================================
+    partner on left/right  -> horizontal pair
+    partner above/below    -> vertical pair
+    no partner             -> single door
 
-The existing build-time wall "EMPTY" assertion reads raw spritePages.
+Then assign the two paired cells opposite retract directions.
 
-But placeholders are applied later by buildTexturePages.
+The orientation should NOT change because the camera approaches from another
+side.
+
+A physical door has one layout orientation in the map.
 
 So:
 
-    raw wall empty
+    DDI should depend on door pairing/map topology
+    SID should depend on ray intersection
 
-does NOT mean:
+Do not use SID to redefine which physical half of a double door the cell is.
 
-    exported/run wall empty
-
-That warning is now known to lie.
-
-Either:
-
-A. rename it explicitly:
-
-    wall has NO USER ART — placeholder will be used
-
-or preferably:
-
-B. run the assertion against the composed buildTexturePages result and report:
-
-    USER ART
-    PLACEHOLDER
-    ACTUALLY EMPTY
-
-Do not leave "EMPTY" as an error/warning when the intended placeholder path
-will populate it.
+That would make the same door change identity when viewed from another angle.
 
 ==================================================
-DO NOT REVERT YET
+IMPORTANT DISTINCTION
 ==================================================
 
-Do NOT jump back to b7ccdf6da47f9076 yet.
+There are TWO axes in play:
 
-A revert bundles multiple state/layout differences and would tell us little.
+1. RAY HIT AXIS
+       SID
+       tells us which grid boundary the ray crossed.
 
-First obtain:
+2. DOOR PAIR / SLIDE AXIS
+       derived from map arrangement
+       tells us where the physical door panel retracts.
 
-1. current raw page keys
-2. current semantic-cell raw alpha counts
-3. composed source PAINTED/PLACEHOLDER
-4. audit of mixed page/global-row writes
+They are not interchangeable.
 
-Those measurements are more informative than another build bisect.
-
-Only bisect if those all look correct.
-
-==================================================
-LIKELY OUTCOMES
-==================================================
-
-CASE A
-
-    enemy1 front raw alpha = 0
-    composed = placeholder
-
-Then artwork is simply not at the CURRENT semantic coordinates.
-
-This is the layout-orphan problem.
-
-Recover/migrate the art; do not debug renderer.
-
-CASE B
-
-    raw alpha > 0
-    composed = painted
-    but RUN still shows placeholder
-
-Then buildTexturePages isn't the object actually reaching RUN, despite the
-current code suggesting it is.
-
-Trace _runPages -> texMap.
-
-CASE C
-
-    page1 correct
-    page2/3/4 missing after import
-
-Then actual runtime state contradicts importSheet source.
-
-Trace setSpritePages lifecycle/effects for a later replacement/reset.
-
-CASE D
-
-    page2+ cells show zero raw pixels after crop/import actions
-    and those writers use sl.row*SIZE
-
-Then the page-key fix exposed stale global-coordinate writes.
-
-Fix every page-aware writer to use cellToRect consistently.
+A door can be viewed from arbitrary directions without changing its own slide
+orientation.
 
 ==================================================
-DO NOT TOUCH
+CHECK THE CURRENT DOUBLE-DOOR INIT
 ==================================================
 
-Do not touch:
+Report exactly how DDI is initialised.
 
-- BSIM/BSPL
-- DDA
+For the door shown in the screenshots, report:
+
+    door cell row/column
+    adjacent cells:
+        left
+        right
+        above
+        below
+
+    chosen pair orientation
+    chosen DDI
+
+Do the same for its partner.
+
+Expected for a pair:
+
+    same orientation
+    opposite slide direction
+
+If both cells receive the same DDI, or vertical pairs are inferred using only
+left adjacency, fix that independently.
+
+==================================================
+DO NOT CHANGE ORDINARY WALLS
+==================================================
+
+Do not alter:
+
+- ordinary D
 - WXF/TXC
-- wall projection
+- normal wall projection
+- DDA stepping
+- BSIM/BSPL
+- atlas
 - z ordering
-- BASIC animation maths
-- facing thresholds
-- texture renderer
 
-The screenshots already demonstrate that the renderer can receive and display
-textures.
+Use separate door variables.
 
-This round is about:
-
-    semantic cell
-        ->
-    raw page coordinates
-        ->
-    composed page provenance
+The closed door path is already visually correct and should remain the control.
 
 ==================================================
-REPORT BACK
+PROPOSED DIAGNOSTIC ORDER
+==================================================
+
+1. Verify SID/DDT/DFR pairing against ordinary wall formula.
+   Expected: PASS.
+
+2. Measure candidate door-centre depth from both sides.
+
+3. Temporarily render OPENING door panels at centre depth only.
+
+4. Confirm:
+       closed door unchanged
+       opening panel no longer jumps between cell boundaries.
+
+5. Separately audit DDI/map pairing.
+
+Do not combine steps 3 and 5 into one build.
+
+We need to know whether depth and slide direction are independently correct.
+
+==================================================
+REPORT
 ==================================================
 
 Return:
 
-1. raw spritePages keys immediately after the page-1 upload
-2. page count entering RUN
-3. placeholder count entering RUN
-4. provenance for enemy1 front1/front2/front3/side1
-5. provenance for wall1..4/door
-6. selected FRONT1 semantic key + current page/x/y
-7. whether its visible Baron pixels occupy that exact rect
-8. complete list of sprite write functions still using global row*SIZE
-9. whether any of those target page >1
-10. only then recommend the smallest fix
+1. SID pairing verdict
+2. DDT from side A
+3. candidate centre depth from side A
+4. DDT from side B
+5. candidate centre depth from side B
+6. result of OPENING-ONLY centre-depth rendering
+7. closed-door result
+8. current DDI initialisation code
+9. door neighbour topology
+10. whether DDI is wrong independently of depth
 
-Do not ship another speculative build before these measurements.
+Do not apply another global door offset.
