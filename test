@@ -1,17 +1,526 @@
-RIG mounts with no parts
-↓
-usePreviewViewport builds THREE scene
-↓
-sceneOverride at build time = null/empty
-↓
-grid renders, zero meshes
-↓
-preset creates six parts + six cached geometries
-↓
-RigWorld computes six new objs
-↓
-sceneOverrideRef updates
-↓
-BUT mesh-building loop NEVER RUNS AGAIN
-↓
-grid forever
+We have the immediate cause, and there is also a second generator problem behind it.
+
+Do NOT search for another section-level animation gate yet.
+
+==================================================
+1. THE KEYFRAME EARLY-RETURN FIX DID NOT LAND
+==================================================
+
+In the CURRENT uploaded source, generateRigBAS still contains:
+
+    if (!p.animX && !p.animY && !p.animZ) return;
+
+before the keyframe emitter.
+
+That is the exact reason the keyed fixture emits no animation section.
+
+A keyed fixture has:
+
+    keys.length > 0
+    animX = false
+    animY = false
+    animZ = false
+
+so it returns before reaching:
+
+    if (p.keys && p.keys.length) {
+        ...
+        DATA ...
+    }
+
+This is not hypothetical.
+
+The uploaded source proves it.
+
+Replace that guard with:
+
+    const _keyed = !!(p.keys && p.keys.length);
+    if (!_keyed && !p.animX && !p.animY && !p.animZ) return;
+
+Do this first.
+
+Then rerun the exact fixture.
+
+Expected immediate result:
+
+    DATA lines now appear.
+
+==================================================
+2. BUT DO NOT CALL THAT "KEYFRAME EXPORT FIXED"
+==================================================
+
+There is a SECOND confirmed problem in the same function.
+
+The current keyframe block emits:
+
+    DATA ...
+    KXn=0 / KYn=0 / KZn=0
+    KFn=KFn+1
+
+but there is NO code that actually retrieves those DATA values.
+
+No:
+
+    READ
+    RESTORE
+
+and no other table lookup.
+
+After the keyframe block, the code still does:
+
+    const rx = axis(`AX${mn}`, p.animX, 'x');
+    const ry = axis(`AY${mn}`, p.animY, 'y');
+    const rz = axis(`AZ${mn}`, p.animZ, 'z');
+
+    MODROT mn,rx,ry,rz
+
+For a purely keyed part:
+
+    animX=false
+    animY=false
+    animZ=false
+
+therefore axis() returns:
+
+    0,0,0
+
+So even after DATA starts emitting, the generated model will remain unrotated.
+
+The current DATA implementation is therefore incomplete.
+
+==================================================
+3. DO NOT USE DATA / READ / RESTORE UNTIL VERIFIED
+==================================================
+
+We have NOT established that EZ-BASIC supports:
+
+    DATA
+    READ
+    RESTORE
+
+Do not assume standard BASIC features exist.
+
+This project has already disproved several "normal BASIC" assumptions.
+
+I searched the current app interpreter and found no obvious command handlers for:
+
+    DATA
+    READ
+    RESTORE
+
+That does not prove hardware lacks them, but it means the emulator does not
+give us confidence either.
+
+Treat all three as:
+
+    UNKNOWN / UNVERIFIED
+
+until checked against the EZ-BASIC reference manual or a tiny hardware test.
+
+Do NOT build the production keyframe format around them yet.
+
+==================================================
+4. CHEAPEST HARDWARE / MANUAL TEST
+==================================================
+
+Before designing further, verify DATA/READ/RESTORE independently.
+
+Tiny program only:
+
+    1000 A=0
+    1001 DATA 10,20,30
+    1002 READ A
+    1003 PRINT A
+    1004 READ A
+    1005 PRINT A
+    1006 RESTORE
+    1007 READ A
+    1008 PRINT A
+
+Expected if supported:
+
+    10
+    20
+    10
+
+Use the exact syntax the manual specifies if it documents these statements.
+
+If ANY of:
+
+    DATA
+    READ
+    RESTORE
+
+are absent from the manual or rejected by hardware:
+
+    abandon this table design.
+
+Do not teach the emulator unsupported syntax merely to make the feature work.
+
+==================================================
+5. FOR NOW, USE ONLY PROVEN EZ-BASIC CONSTRUCTS
+==================================================
+
+Until DATA is proven, implement the first working keyframe exporter using
+constructs already known to work.
+
+The safest form is a frame counter plus inline IF assignments.
+
+Example for one keyed X axis:
+
+    KF1=KF1+1
+    IF KF1>31 THEN KF1=0
+    RX1=0
+    IF KF1=0 THEN RX1=0
+    IF KF1=1 THEN RX1=3.8
+    IF KF1=2 THEN RX1=7.5
+    ...
+    MODROT 1,RAD(RX1),0,0
+
+This is verbose but uses known semantics:
+
+    assignment
+    inline IF
+    integer frame counter
+    MODROT
+    RAD
+
+Do not use block IF.
+
+==================================================
+6. EMIT ONLY AXES THAT ACTUALLY CHANGE
+==================================================
+
+Your bake helper already does this correctly:
+
+    if (vals.every(v => v === 0)) return;
+
+Preserve that optimisation.
+
+For each keyed part compute:
+
+    X values
+    Y values
+    Z values
+
+Then classify:
+
+A. all zero
+    -> no axis code
+
+B. constant non-zero
+    -> assign once outside loop if safe
+       or emit constant directly in MODROT
+
+C. varying
+    -> frame-indexed runtime value
+
+This can save a lot of lines.
+
+==================================================
+7. DO NOT EMIT ONE IF PER FRAME WHEN VALUES REPEAT
+==================================================
+
+Before accepting 32 lines per axis, compress baked runs.
+
+Example:
+
+    0,0,0,0,15,15,15,15,30,30...
+
+does not need 32 independent assignments if there are repeated ranges.
+
+But do NOT invent range maths that costs more executed work than it saves.
+
+First implementation may simply emit one IF per distinct frame if needed.
+
+Correctness first.
+
+==================================================
+8. BETTER OPTION: KEY SEGMENT INTERPOLATION ON PS2
+==================================================
+
+Do NOT immediately bake every frame if source keys are sparse.
+
+Your actual input already contains keys:
+
+    t=0   x=0
+    t=8   x=30
+    t=16  x=0
+    t=24  x=-30
+
+That is only FOUR keys for a 32-frame clip.
+
+Instead of storing 32 baked values, the generator could eventually emit
+piecewise interpolation directly from the keyframes.
+
+Conceptually:
+
+    KF = frame
+
+segment 0..8:
+    X = 0 + (30-0) * KF/8
+
+segment 8..16:
+    X = 30 + (0-30) * (KF-8)/8
+
+etc.
+
+This can be much smaller than:
+
+    32 IF statements per axis
+
+when key counts are low.
+
+BUT do not implement this until we verify the arithmetic and inline-IF shape
+against EZ-BASIC.
+
+For the first hardware-safe version, explicit frame values are acceptable.
+
+==================================================
+9. DO NOT INTERPOLATE A SECOND TIME AT RUNTIME YET
+==================================================
+
+Question: should we bake at lower FPS and interpolate on PS2?
+
+Not yet.
+
+The engine is already interpreted and performance-sensitive.
+
+Runtime interpolation means extra arithmetic EVERY frame for EVERY keyed axis.
+
+A lower-rate table saves source lines but trades them for runtime maths.
+
+Until measured, prefer:
+
+    source-size optimisation through sparse keys / generated conditions
+
+over:
+
+    more per-frame interpreter work.
+
+==================================================
+10. LINE BUDGET POLICY
+==================================================
+
+Do not choose a hard frame cap arbitrarily yet.
+
+Calculate the generated cost.
+
+For a naive 32-frame IF table:
+
+    per varying axis:
+        about 32 IF lines
+
+For N parts with 3 animated axes:
+
+    32 * 3 * N
+
+That grows quickly.
+
+But real clips may have:
+
+    fewer keyed parts
+    fewer keyed axes
+    sparse keys
+
+So expose/report:
+
+    KEYED PARTS
+    VARYING AXES
+    CLIP LENGTH
+    GENERATED KEYFRAME LINES
+    TOTAL BAS LINES
+
+before enforcing a cap.
+
+If we need a product limit later, base it on generated BASIC line pressure,
+not an arbitrary animation-frame number.
+
+==================================================
+11. IMPORTANT: INITIALISE KF
+==================================================
+
+The current keyframe block increments:
+
+    KF${mn}=KF${mn}+1
+
+but I do not see an explicit:
+
+    KF${mn}=0
+
+in the init section before the DO loop.
+
+Add explicit initialization for keyed parts.
+
+Do not rely on default numeric zero unless the EZ-BASIC manual explicitly
+guarantees it.
+
+Also decide whether frame 0 should display on the first loop.
+
+Current sequence:
+
+    increment first
+    render second
+
+would begin at frame 1.
+
+If preview starts at frame 0, export should ideally match.
+
+Prefer:
+
+    use KF
+    render
+    then increment
+
+or initialise to the value needed for exact parity.
+
+Test this deliberately.
+
+==================================================
+12. KEYFRAMES MUST BYPASS PROCEDURAL MODROT
+==================================================
+
+Generator structure should be explicitly exclusive:
+
+    if keyed:
+        emit keyed rotation path
+
+    else if procedural:
+        emit AX/AY/AZ sine/spin path
+
+Do not run the keyed block and then fall through into the procedural:
+
+    axis(AX...)
+    MODROT ...
+
+That is the structural flaw in the current attempt.
+
+Pseudo-structure:
+
+    const keyed = !!p.keys?.length
+
+    if (keyed) {
+        emit keyed MODROT
+        return
+    }
+
+    if (!animX && !animY && !animZ) return
+
+    emit existing procedural path
+
+This keeps the lossless procedural code untouched.
+
+==================================================
+13. PROTECT THE LOSSLESS GATE
+==================================================
+
+The existing migration gate must remain true for all procedural fixtures.
+
+That means:
+
+    if no keys:
+        generated BAS must remain BYTE IDENTICAL
+
+Do not move, rename, or reformat existing procedural lines unnecessarily.
+
+All new code must be behind:
+
+    p.keys && p.keys.length
+
+The fixture comparison remains the guardrail.
+
+==================================================
+14. ADD A KEYFRAME GENERATOR TEST
+==================================================
+
+Add a separate test from the procedural lossless gate.
+
+Fixture:
+
+    one part
+    four X keys
+    length 32
+
+Assert generated BAS contains:
+
+    keyed frame counter
+    keyed X assignments/table
+    MODROT 1 using keyed X value
+
+and does NOT contain:
+
+    AX1=AX1+...
+    SIN(RAD(AX1))
+
+for that part.
+
+Also test:
+
+    one key -> held constant
+    empty keys -> procedural fallback
+    X+Y keyed -> both axes reach MODROT
+    all-zero Z -> no unnecessary Z table
+    frame 32 wraps to frame 0 semantics
+
+==================================================
+15. WHAT TO DO RIGHT NOW
+==================================================
+
+Do this in two passes.
+
+PASS A — DIAGNOSTIC ONLY:
+
+1. fix the still-old early return
+2. rerun fixture
+3. confirm DATA now appears
+4. report exact emitted BAS
+
+Do not claim runtime export works.
+
+PASS B — FORMAT DECISION:
+
+5. verify DATA/READ/RESTORE from manual/hardware
+6. if supported, design a complete reader that actually feeds MODROT
+7. if unsupported, use proven inline-IF/key interpolation path
+
+Do not continue implementing an unverified DATA architecture before step 5.
+
+==================================================
+DO NOT TOUCH
+==================================================
+
+Do not change:
+
+- MODLOAD
+- MODSET
+- MODJOIN
+- MODPOS
+- procedural animation string output
+- migration schema
+- clip UI
+- keyframe evaluator
+- RigWorld preview
+
+The preview/evaluator are already working.
+
+This is exclusively generateRigBAS.
+
+==================================================
+REPORT BACK
+==================================================
+
+Return:
+
+1. exact uploaded old guard
+2. exact corrected guard
+3. fixture BAS after guard correction
+4. DATA line count
+5. whether MODROT still resolves to 0,0,0
+6. manual/hardware result for DATA
+7. manual/hardware result for READ
+8. manual/hardware result for RESTORE
+9. selected runtime representation
+10. generated line cost for the 32-frame fixture
+11. procedural lossless gate result
+
+Do not proceed to clip switching until keyed BAS itself actually drives MODROT.
