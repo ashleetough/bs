@@ -1,388 +1,659 @@
-ROOT CAUSE OF THIN-WALL WARP IS NOW DERIVED.
+We need to stop "making RIG look like SCRIPT" and instead make RIG USE THE
+SAME 3D WORKSPACE PATTERN as SCRIPT.
 
-Do not change D, TXC, WXF, wall projection, or DDA stepping.
+The current RIG is still architecturally separate:
 
-The hEdges/vEdges packing is correct.
+    <RigViewport size={420} ... />
 
-The bug is that the edge lookup uses the ENTERED cell without compensating for
-the DDA step direction.
+inside a centred box, with its own:
+
+- renderer
+- PerspectiveCamera
+- orbit maths
+- wheel zoom
+- grid
+- lights
+- fixed sizing
+- camera behaviour
+
+That is why it never quite matches SCRIPT.
+
+USER REQUIREMENT:
+
+    FORGE -> RIG
+
+must have the EXACT SAME 3D WORLD SPACE and RIGHT-BAR EXPERIENCE as SCRIPT.
+
+Not "similar".
+Not "same colours".
+Not another manually matched renderer.
+
+Use the existing SCRIPT world behaviour as the reference implementation.
 
 ==================================================
-EDGE STORAGE CONVENTION
+1. FIRST: INSPECT SCRIPT, DO NOT GUESS
 ==================================================
 
-The editor/source defines:
+Before changing RIG, trace the actual SCRIPT layout and viewport code.
 
-    hEdges[row][col]
-        = SOUTH edge of cell row,col
-        = boundary between row and row+1
+Specifically identify:
 
-    vEdges[row][col]
-        = EAST edge of cell row,col
-        = boundary between col and col+1
+    ScriptsPlaceholder
+    scriptMountRef
+    usePreviewViewport(...)
+    rightPanelOpen / sidebarOpen
+    scriptFull
+    the viewport flex container
+    the right sidebar wrapper
+    the collapse tab
+    renderer sizing
+    camera/orbit controls
+    resize observer
+    grid
+    background/theme handling
 
-Packing:
+Document the exact reusable pieces.
 
-    H: 13 rows x 14 cols
-       index = row*14 + col
+SCRIPT currently has:
 
-    V: 14 rows x 13 cols
-       index = row*13 + col
+    centre viewport:
+        flex:1
+        position:relative
+        overflow:hidden
 
-That part is correct and must not be changed.
+    mount:
+        width:100%
+        height:100%
+
+and its 3D renderer sizes to the actual mount.
+
+RIG must work the same way.
 
 ==================================================
-WHAT DDA MX/MY MEAN
+2. REMOVE THE FIXED 420x420 RIG WORLD
 ==================================================
 
-The DDA does:
+Current RIG does this:
 
-    MX = MX + SIX
+    <RigViewport
+      ...
+      size={420}
+    />
+
+That is wrong for the desired layout.
+
+The 3D world must NOT be a fixed square.
+
+RIG viewport should fill all available space between the Forge tab/header and
+the right sidebar:
+
+    width: 100% of remaining centre area
+    height: 100%
+    flex: 1
+    minWidth: 0
+    minHeight: 0
+
+Use a ResizeObserver exactly as SCRIPT does.
+
+The canvas must resize in-place when:
+
+    window changes
+    right panel opens/closes
+    Forge panel changes size
+    browser zoom/layout changes
+
+Do NOT rebuild the WebGL renderer just because dimensions change.
+
+==================================================
+3. USE THE SAME WORLD SPACE AS SCRIPT
+==================================================
+
+RIG must use the same WORLD conventions as SCRIPT.
+
+That means the same:
+
+- Three.js coordinate system
+- camera FOV
+- near/far planes
+- orbit target conventions
+- camera orbit behaviour
+- pan behaviour if SCRIPT supports it
+- wheel zoom/dolly behaviour
+- grid size/orientation
+- grid theme colours
+- background treatment
+- renderer antialiasing
+- devicePixelRatio treatment
+- lighting defaults
+- scene unit scale
+
+Do NOT hand-copy approximate values if there is already a shared helper.
+
+Prefer extracting/reusing the SCRIPT viewport implementation.
+
+The goal is:
+
+    if an object at world position X,Y,Z is shown in SCRIPT
+    and the same object is shown in RIG,
+    it appears in the SAME world coordinate system.
+
+No RIG-only scale illusion.
+
+No fixed 420px framing.
+
+No separate camera convention.
+
+==================================================
+4. PREFERRED ARCHITECTURE
+==================================================
+
+Do NOT keep two independently maintained viewport engines:
+
+    usePreviewViewport()
+    RigViewport()
+
+That guarantees drift.
+
+Instead extract/shared-build a generic workspace viewport, for example:
+
+    useWorkspaceViewport(...)
 or
-    MY = MY + SIY
+    SharedForgeViewport
 
-BEFORE performing the edge lookup.
+which owns:
 
-Therefore MX/MY represent the cell the ray has JUST ENTERED.
+    scene
+    camera
+    renderer
+    grid
+    orbit controls
+    resize
+    theme
+    lifecycle/disposal
 
-But the physical boundary just crossed is not always stored against that cell.
+Then supply MODE-SPECIFIC scene population.
 
-It depends on step sign.
+SCRIPT population:
 
-==================================================
-SID=0 — VERTICAL BOUNDARY / vEdges
-==================================================
+    synthetic SCRIPT slot objects
+    optional bounds box
 
-SID=0 means MX changed.
+RIG population:
 
-Current:
+    rig hierarchy groups
+    MODJOIN parent hierarchy
+    MODPOS local offsets
+    per-part animation
 
-    EI=MY*13+MX+1
+The world/camera implementation should be ONE thing.
 
-Interpretation:
-    vEdges[MY][MX]
-
-This is correct only for SIX=-1.
-
-CASE SIX=-1:
-
-    old cell: col MX+1
-    new cell: col MX
-
-The ray crossed the WEST boundary of the old cell.
-
-That is the EAST edge of the NEW cell:
-
-    vEdges[MY][MX]
-
-So current lookup is correct.
-
-CASE SIX=+1:
-
-    old cell: col MX-1
-    new cell: col MX
-
-The ray crossed the EAST edge of the OLD cell:
-
-    vEdges[MY][MX-1]
-
-Current lookup instead asks for:
-
-    vEdges[MY][MX]
-
-which is one boundary too far right.
+If refactoring usePreviewViewport safely is too large for this pass, then make
+RIG call/usePreviewViewport-compatible shared internals rather than recreating
+camera/render behaviour a third time.
 
 ==================================================
-SID=1 — HORIZONTAL BOUNDARY / hEdges
+5. RIG HIERARCHY STILL REMAINS RIG-SPECIFIC
 ==================================================
 
-SID=1 means MY changed.
+Do NOT lose the good part of RigViewport.
 
-Current:
+Preserve:
 
-    EI=MY*14+MX+1
+    parts[]
+    parentIdx
+    offsets
+    scale
+    MODJOIN-style hierarchy
+    animation amplitude
+    animation speed
 
-Interpretation:
-    hEdges[MY][MX]
+The hierarchy should be added INTO the shared world.
 
-This is correct only for SIY=-1.
+Conceptually:
 
-CASE SIY=-1:
+    shared world
+      ├── grid
+      ├── lights
+      └── rigRoot
+            ├── part 1
+            │    └── part 2
+            └── part 3
 
-    old row: MY+1
-    new row: MY
+Animation can update those Groups every frame.
 
-The ray crossed the NORTH boundary of the old cell.
-
-That is the SOUTH edge of the NEW cell:
-
-    hEdges[MY][MX]
-
-Current lookup is correct.
-
-CASE SIY=+1:
-
-    old row: MY-1
-    new row: MY
-
-The ray crossed the SOUTH edge of the OLD cell:
-
-    hEdges[MY-1][MX]
-
-Current lookup instead asks for:
-
-    hEdges[MY][MX]
-
-which is one boundary too far down.
+But camera/grid/world sizing must come from the shared SCRIPT viewport.
 
 ==================================================
-MINIMAL FIX
+6. COPY SCRIPT'S RIGHT-PANEL STRUCTURE
 ==================================================
 
-Preserve the existing 1-based string indexing.
+The RIG right bar should behave like SCRIPT's right bar.
 
-A minimally invasive form is:
+SCRIPT currently has:
 
-    EI=0
+    wrapper with position:relative
+    collapse handle sticking into viewport
+    animated width
+    fixed sidebar width when open
+    flex column
+    overflow hidden at outer level
+    inner scrolling content
 
-    IF WV=0 AND SID=1 THEN EI=MY*14+MX+1
-    IF WV=0 AND SID=1 AND SIY=1 THEN EI=EI-14
+Use the SAME pattern.
 
-    IF WV=0 AND SID=0 THEN EI=MY*13+MX+1
-    IF WV=0 AND SID=0 AND SIX=1 THEN EI=EI-1
+Do not leave RIG as:
 
-Then existing:
+    width:240
+    always visible
+    overflowY:auto
 
-    IF EI<1 THEN EI=1
-    IF EI>182 THEN EI=1
-    IF WV=0 AND SID=1 AND HW$(EI:EI)="1" THEN WV=8
-    IF WV=0 AND SID=0 AND VW$(EI:EI)="1" THEN WV=8
+Current RIG right panel is structurally different.
 
-can remain.
+Make it:
 
-This gives:
+    rigRightOpen state
 
-VERTICAL:
-    SIX=-1 -> MY*13+MX+1
-    SIX=+1 -> MY*13+MX
+with:
 
-HORIZONTAL:
-    SIY=-1 -> MY*14+MX+1
-    SIY=+1 -> (MY-1)*14+MX+1
+    open width matching SCRIPT right panel
+    closed width 0
+    same 16px half-height collapse handle
+    same transition timing
+    same border
+    same background
+    same z-index
+    same arrow orientation
+    same scroll behaviour
 
-which exactly matches the editor's east/south ownership convention.
-
-==================================================
-DO NOT "FIX" THE STRIDES
-==================================================
-
-Do not change:
-
-    horizontal stride 14
-    vertical stride 13
-
-They are correct.
-
-The handoff already disproved the stride theory:
-
-    HW = 13*14 = 182
-    VW = 14*13 = 182
-
-Reader and writer agree.
+If possible, reuse the same sidebar shell component rather than duplicating
+the JSX.
 
 ==================================================
-DO NOT CHANGE DISTANCE
+7. MATCH THE RIGHT BAR WIDTH EXACTLY
 ==================================================
 
-Once the correct edge is identified, the existing wall distance is already the
-distance to the boundary just crossed:
+SCRIPT's current right panel open width is:
 
-    SID=0:
-        D=SDX-DDX
+    256px
 
-    SID=1:
-        D=SDY-DDY
+Use the SAME width for RIG.
 
-That is exactly where an edge wall physically lives.
+Do not use 240px.
 
-Do NOT add:
-
-    half-cell offsets
-    +/- DDX
-    +/- DDY
-
-to compensate for the lookup error.
-
-That would turn an indexing bug into a geometry bug.
+The screenshot currently shows RIG narrower/different because it is still
+using its own 240px panel.
 
 ==================================================
-DO NOT CHANGE TXC
+8. RIG RIGHT-BAR CONTENT
 ==================================================
 
-Likewise, after the correct edge becomes WV=8:
+The shell/function should match SCRIPT, but RIG keeps its own controls.
 
-    IF SID=0 THEN WXF=PY+D*RY
-    ELSE WXF=PX+D*RX
+Put the existing RIG controls inside the shared right-panel shell:
 
-is the normal coordinate along the boundary.
+    CAMERA
+    BG COLOR
+    BODY PARTS
+    ADD PART
+    parent/join settings
+    offsets
+    scale
+    axis
+    amplitude
+    speed
+    script display
+    export path
+    export RIG.ZIP
+    help note
 
-Do not change WXF/TXC unless the wall remains texture-warped AFTER the lookup
-fix.
+Do NOT delete RIG functionality just to copy SCRIPT styling.
 
-First fix which physical edge is being hit.
-
-==================================================
-CONTROLLED TEST
-==================================================
-
-Before testing a complex map, create ONE isolated vertical thin wall separating
-two empty cells.
-
-Approach it:
-
-    west -> east
-    east -> west
-
-Expected after fix:
-
-    same physical boundary from both directions
-    same apparent depth
-    no one-cell jump
-
-Then create ONE isolated horizontal edge.
-
-Approach:
-
-    north -> south
-    south -> north
-
-Expected:
-
-    same physical boundary from both directions.
+We are replacing the container/interaction model, not the feature set.
 
 ==================================================
-ADD TEMPORARY EDGE DEBUG
+9. CAMERA CONTROLS: DO NOT KEEP DUPLICATE RIG ORBIT MATH
 ==================================================
 
-For the centre ray only, optionally display:
+The current RigViewport has:
 
-    SID
-    SIX
-    SIY
-    MX
-    MY
-    EI
-    WV
+    yaw
+    pitch
+    dist
+    custom mousedown/mousemove
+    custom wheel scaling
 
-For a single vertical edge, the EI value must be IDENTICAL when that same
-physical edge is approached from both sides.
+Remove that duplication once RIG is on the shared viewport.
 
-Likewise for a horizontal edge.
+Mouse behaviour in RIG should be IDENTICAL to SCRIPT.
 
-This is the strongest acceptance test.
+If SCRIPT supports:
 
-Example conceptual vertical edge:
+    left drag orbit
+    right/mid drag pan
+    scroll zoom
+    WASD / arrow navigation
 
-    west approach:
-        SID 0
-        SIX 1
-        adjusted EI N
+then RIG should support those too.
 
-    east approach:
-        SID 0
-        SIX -1
-        EI N
-
-Same N.
-
-If those differ, do not touch rendering geometry — the edge lookup is still
-wrong.
+Do not leave RIG with drag+wheel only.
 
 ==================================================
-CHECK BOUNDS SEMANTICS
+10. CAMERA SLIDERS
 ==================================================
 
-The current:
+The RIG camera sliders can remain, but reinterpret them as controls over the
+SAME shared camera state.
 
-    IF EI<1 THEN EI=1
-    IF EI>182 THEN EI=1
+Do not have:
 
-is questionable as a defensive fallback because an invalid lookup silently
-becomes edge 1.
+    sliders controlling one starting camera
+    mouse orbit controlling a disconnected private camera model
 
-Do NOT change it as part of this bug fix unless necessary.
+Preferred:
 
-But after the directional fix, add a temporary assertion/debug warning when EI
-falls outside 1..182.
+    CAM Z / CAM Y / TARGET Y
 
-Later we should probably treat invalid EI as "no edge" rather than aliasing
-edge 1.
+update/reset the shared orbit state.
 
-Keep that as separate cleanup.
+If the user mouse-orbits afterward, the shared state updates normally.
 
-==================================================
-IMPORTANT SECONDARY LIMIT
-==================================================
+If maintaining those sliders becomes awkward, preserve them as:
 
-Current thin-edge lookup runs only when:
+    RESET/STARTING FRAME
 
-    WV=0
-
-That means an edge sitting on the boundary of a non-empty map cell may not be
-considered because ordinary cell geometry wins first.
-
-Do not expand that semantic in this fix.
-
-For the controlled test use empty cells on both sides.
-
-Once directional lookup is proven, decide separately whether thin edges should
-be allowed to coexist with solid map cells.
+but do not create another camera system solely for them.
 
 ==================================================
-STRIP ASSERTION
+11. EXACT SAME FLOOR / GRID
 ==================================================
 
-Keep the existing permanent renderer assertion:
+Current RigViewport creates:
 
-    SPRPOS2 200..327 = 128/128
-    SPRDISP 200..327 = 128/128
+    new THREE.GridHelper(600,20,0x1a2a3a,0x111a26)
 
-Do not reintroduce generated-text cleanup or overlay work while fixing thin
-walls.
+That is hardcoded.
 
-==================================================
-DO NOT TOUCH
-==================================================
+SCRIPT's shared preview derives the grid from theme colours and its existing
+workspace setup.
 
-Do not change:
+Use the SCRIPT implementation.
 
-- BSIM/BSPL
-- DDA stepping mathematics
-- DDX/DDY
-- SDX/SDY
-- ordinary WXF/TXC
-- wall projection
-- atlas allocation
-- z ordering
-- wall strip generation
-- sprite IDs
+The RIG grid should not be a visual approximation.
 
-This is an edge-owner/index-selection bug.
+When the theme changes:
+
+    SCRIPT grid changes
+    RIG grid changes identically
+
+without rebuilding the entire renderer if SCRIPT already handles live theme
+updates.
 
 ==================================================
-REPORT BACK
+12. SAME BACKGROUND BEHAVIOUR
+==================================================
+
+Current RIG has a separate rigBgColor driving scene.background.
+
+If SCRIPT world uses the theme-deepened background, make that the default for
+RIG too.
+
+If RIG BG COLOR is an intentional export feature, keep it as an optional
+override:
+
+    WORLD BG:
+        THEME / CUSTOM
+
+Default:
+    THEME
+
+CUSTOM:
+    rigBgColor
+
+But the initial view should visually match SCRIPT exactly.
+
+Do not let RIG start as a flat black square while SCRIPT has a themed recessed
+world.
+
+==================================================
+13. SAME LIGHTING
+==================================================
+
+Current RIG uses:
+
+    AmbientLight(white,0.75)
+    DirectionalLight(white,0.6)
+
+SCRIPT/shared preview has its own lighting.
+
+Use SCRIPT's lighting in RIG.
+
+Do not maintain two lighting implementations.
+
+The rig parts should look like they belong in the same application world.
+
+==================================================
+14. SAME MODEL MATERIAL PATH
+==================================================
+
+Current RIG blindly creates:
+
+    MeshLambertMaterial({
+      color: 0x99aabb
+    })
+
+for every loaded part.
+
+That means RIG does NOT necessarily show the model the same way SCRIPT does.
+
+Inspect how usePreviewViewport builds meshes from:
+
+    geoCache
+    modCache
+    texCache
+    tint
+    texture
+
+RIG should reuse that material/model creation path where possible.
+
+The user's actual MOD should look the same in SCRIPT and RIG.
+
+Do not reduce it to a generic blue-grey Lambert mesh merely because it is in a
+rig.
+
+This is part of "same 3D world."
+
+==================================================
+15. SAME FULL-SCREEN MODEL IF APPROPRIATE
+==================================================
+
+SCRIPT has a viewport-level FULL SCREEN control that collapses panels.
+
+RIG should have the same pattern if there is no conflict with Forge's own UI.
+
+Add:
+
+    ⤢ FULL SCREEN
+
+inside the RIG viewport in the same bottom-left location/style.
+
+When enabled:
+
+    hide/collapse RIG right bar
+    maximise world viewport
+
+Esc exits.
+
+Do not put the control inside the right panel.
+
+It belongs to the viewport.
+
+==================================================
+16. RIGHT PANEL COLLAPSE
+==================================================
+
+Add the same centre-edge tab shown in SCRIPT.
+
+RIG open:
+
+    [ world                 ][ RIG PANEL ]
+                             ‹/› handle
+
+RIG closed:
+
+    [ world fills space ][handle]
+
+Opening and closing must NOT reset:
+
+    camera angle
+    zoom
+    rig animation time
+    selected part
+
+Only resize the viewport.
+
+==================================================
+17. LAYOUT TARGET
+==================================================
+
+The final RIG layout should structurally be:
+
+    Forge header / tabs
+    ┌────────────────────────────────────────────────────────────┐
+    │                                                            │
+    │               SAME SCRIPT 3D WORLD                         │
+    │                                                            │
+    │ grid / orbit / zoom / theme / renderer                    │
+    │                                                            │
+    │                                         ┌────────────────┐ │
+    │                                         │ CAMERA         │ │
+    │                                         │ BODY PARTS     │ │
+    │                                         │ ...            │ │
+    │                                         │ EXPORT         │ │
+    │                                         └────────────────┘ │
+    └────────────────────────────────────────────────────────────┘
+
+Not:
+
+    centred 420x420 viewport
+    +
+    separate arbitrary sidebar.
+
+==================================================
+18. DO NOT CHANGE RIG EXPORT SEMANTICS
+==================================================
+
+Do not alter:
+
+    generateRigBAS
+    MODJOIN
+    MODPOS
+    parent ordering
+    rig ZIP
+    rig MOD paths
+    animation export semantics
+
+This pass is the editor/world UX.
+
+The generated PS2 rig behaviour must remain identical.
+
+==================================================
+19. LIFECYCLE / WEBGL SAFETY
+==================================================
+
+Be careful here because this app has already hit WebGL context exhaustion.
+
+Do not create a new renderer on every sidebar resize or camera change.
+
+Renderer lifecycle should be like SCRIPT:
+
+    create once on mount/rebuild-worthy dependency
+    resize with ResizeObserver
+    dispose once on unmount
+
+Remove all listeners on cleanup.
+
+Do not leave:
+
+    window mousemove
+    window mouseup
+    wheel
+
+listeners behind when switching Forge modes.
+
+==================================================
+20. ACCEPTANCE TEST
+==================================================
+
+After implementation compare SCRIPT and RIG side by side.
+
+A. Empty world:
+    same background treatment
+    same grid scale
+    same grid orientation
+    same camera perspective
+
+B. Same MOD:
+    load same model in SCRIPT and RIG
+    same apparent world scale
+    same shading/material appearance
+
+C. Controls:
+    same drag behaviour
+    same wheel zoom
+    same pan/navigation where supported
+
+D. Resize:
+    collapse RIG right bar
+    canvas expands
+    camera DOES NOT reset
+
+E. Re-open panel:
+    same camera position/orbit remains
+
+F. Window resize:
+    viewport fills available area correctly
+
+G. RIG animation:
+    hierarchy still animates correctly
+
+H. Export:
+    RIG.BAS/RIG.ZIP output unchanged
+
+==================================================
+21. REMOVE OBSOLETE RIGVIEWPORT DUPLICATION
+==================================================
+
+Once the shared-world RIG path is verified, remove or reduce the old
+RigViewport implementation.
+
+Do not leave a second unused renderer/camera implementation in the file.
+
+If RigViewport remains as a wrapper, it should be a thin adapter to the shared
+viewport, not another Three.js engine.
+
+==================================================
+22. REPORT BACK
 ==================================================
 
 Return:
 
-1. exact old EI equations
-2. exact new EI equations
-3. vertical edge EI from west
-4. same edge EI from east
-5. horizontal edge EI from north
-6. same edge EI from south
-7. visual result from both sides
-8. strip assertion result
-9. final line count
+1. exact SCRIPT viewport implementation reused
+2. exact SCRIPT sidebar shell reused
+3. old RigViewport camera/render code removed
+4. RIG open sidebar width
+5. RIG collapse behaviour
+6. world/grid/background parity with SCRIPT
+7. camera-control parity
+8. model-material parity
+9. renderer lifecycle/disposal
+10. confirmation rig export code unchanged
 
-Do not make adjacent renderer changes in the same build.
+Inspect the current file first.
+
+Do not stop after moving the JSX around and call it done.
+
+The test is FUNCTIONAL PARITY:
+
+    RIG WORLD == SCRIPT WORLD
+
+with RIG-specific hierarchy/edit controls layered into it.
