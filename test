@@ -1,308 +1,742 @@
-Do one SMALL, isolated RIG usability pass.
+We now have enough evidence to scope the SCENE transform-toolbar/gizmo pass
+correctly.
 
-Do NOT implement viewport picking or a rotation gizmo in this pass.
+IMPORTANT CORRECTION:
 
-The viewport-picking research is sound, but it touches shared
-usePreviewViewport infrastructure and should be its own fresh task.
+SCENE does NOT have a Blender-style transform gizmo.
+
+But it DOES already have:
+
+    viewport raycast picking
+    direct object dragging
+    X/Z drag on normal left-drag
+    Y drag via Shift+drag
+    orbit / fly / pan
+    face-paint picking
+    texture-stamp picking
+
+So this is NOT "build picking from scratch".
+
+And it is NOT "migrate Scene onto usePreviewViewport first".
+
+We should extend the EXISTING App scene renderer with the RIG-style gizmo.
 
 ==================================================
-1. KEEP THE CURRENT TRANSFORM MODEL
+1. DO NOT MIGRATE SCENE TO usePreviewViewport
 ==================================================
 
-The current architecture is now useful groundwork:
+Keep Scene on its existing App-owned THREE renderer.
 
-    rigSelectedIdx     = canonical active part
-    rigXform           = move | rotate | scale
-    rigAxis            = x | y | z | null
-    +/-                = applies the selected transform
+The Scene renderer already owns many Scene-specific behaviours:
 
-Do not redesign this.
+    meshMap
+    decorMap
+    Raycaster
+    face paint
+    texture stamp face picking
+    locked/hidden pick filtering
+    X/Z direct dragging
+    Shift+drag Y
+    orbit camera
+    fly camera
+    PS2 camera preview
+    sky/decor helpers
+    point lights
+    camera gizmos
+    snapping interaction
 
-Do not merge rigSelectedIdx with rigPickIdx.
+Migrating all of that into usePreviewViewport is a much larger project than
+adding transform handles.
 
-Do not change rig data semantics.
+It would also put the application's PRIMARY editor through a renderer migration
+solely to inherit a gizmo.
+
+Do not do that.
 
 ==================================================
-2. MAKE THE TOOLBAR HONEST
+2. CORRECT THE MISLEADING COMMENT
 ==================================================
 
-The current toolbar visually risks implying that selecting:
+Current updateObj comment says:
+
+    every path that moves an object goes through updateObj —
+    the viewport gizmo, the OBJECT tab fields and the context menu alike
+
+That is currently false.
+
+There is no Scene gizmo.
+
+And the current viewport drag directly does:
+
+    grp.position...
+    objsRef.current mutation
+    setScene(...)
+
+rather than calling updateObj.
+
+Correct the comment as part of this pass.
+
+More importantly, do not build the new gizmo using another direct state-writing
+path.
+
+The new gizmo MUST call updateObj.
+
+==================================================
+3. CURRENT SCENE PICKING IS ALREADY GOOD
+==================================================
+
+Reuse the existing Scene raycaster.
+
+It already does:
+
+    const r = mount.getBoundingClientRect()
+
+    mouse2d.x = ...
+    mouse2d.y = ...
+
+and raycasts only actual model meshes collected from meshMap.
+
+It also correctly excludes:
+
+    hidden layers
+    locked layers
+    noSelect meshes
+
+Do not create a second independent picking system.
+
+Extend the existing onDown path.
+
+==================================================
+4. ADD SCENE TRANSFORM STATE
+==================================================
+
+Introduce editor-only Scene transform state, analogous to RIG:
+
+    sceneXform = 'move' | 'rotate' | 'scale'
+    sceneAxis  = null | 'x' | 'y' | 'z'
+
+These are UI/editor state only.
+
+Do not persist them into scene objects or BAS.
+
+Default:
+
+    move
+    axis null
+
+==================================================
+5. PORT THE RIG TOOLBAR VISUALLY
+==================================================
+
+Add the same compact transform toolbar in the Scene viewport:
 
     MOVE
     ROTATE
     SCALE
-    X / Y / Z
 
-lets the user manipulate the model directly in the viewport.
+    X
+    Y
+    Z
 
-It does not.
+Use the same icons, dimensions and general styling as RIG so the application
+has one transform language.
 
-For now these are NUDGE controls.
+Do not keep two unrelated transform tool designs.
 
-Adjust labels/tooltips/microcopy so the interaction is obvious:
-
-    choose transform mode
-    choose axis
-    use + / - to nudge
-
-Do not make it look like a Blender gizmo until viewport dragging actually
-exists.
-
-Keep the compact toolbar.
+If RIG has +/- nudge controls, Scene may have them too, but wire them through
+updateObj and current selection.
 
 ==================================================
-3. ADD CLICK-AND-HOLD REPEAT TO + / -
+6. ADD ONE GIZMO TO THE EXISTING SCENE THREE SCENE
 ==================================================
 
-Currently +/- performs one step per click.
+Inside the App scene renderer setup, create:
 
-Make pointer hold repeat the nudge.
+    const transformGizmo = new THREE.Group()
 
-Desired behaviour:
+Add it to the existing THREE scene.
 
-    pointerdown
-        apply one step immediately
+Reuse/adapt the RIG primitive approach:
 
-    short delay (~250-350ms)
+MOVE:
+    three axis arrows
 
-    while held
-        repeat at a comfortable rate (~60-100ms)
+ROTATE:
+    three axis rings
 
-    pointerup
-    pointercancel
-    pointerleave
-        stop repeating
+SCALE:
+    three endpoint cubes
 
-Mouse and pen should work through pointer events.
+Do NOT import TransformControls.
 
-Do not create runaway timers.
+The RIG primitive gizmo is already working and proven in this exact application.
 
-Always clean up the interval/timeout.
+Use the same:
 
-A normal quick click should still produce exactly ONE nudge.
+    axis colours
+    depthTest:false
+    high renderOrder
+    gizmoAxis metadata
+    screen-space drag projection
 
-==================================================
-4. KEEP EXISTING STEP SIZES
-==================================================
-
-Do not tune transform semantics in this pass.
-
-Preserve the current values:
-
-    MOVE     1 unit
-    ROTATE   5 degrees
-    SCALE    0.1
-
-Preserve:
-
-    axis selected -> affect that axis
-    no axis       -> existing all-axis behaviour
-
-Do not change stored fields or generator interpretation.
+Do not fork the maths unnecessarily.
 
 ==================================================
-5. DO NOT KEY AUTOMATICALLY
+7. GIZMO POSITION FOR SINGLE SELECTION
 ==================================================
 
-Nudging is editing the current structural/pose values.
+For one selected object:
 
-Do not silently create keyframes merely because +/- was held.
+    gizmo.position = selected object's world position
 
-Existing explicit KEY behaviour remains explicit.
+Use the live mesh group's position where appropriate so the gizmo matches what
+the user sees.
 
-Pose-then-key can come later.
-
-==================================================
-6. NO VIEWPORT PICKING YET
-==================================================
-
-Do NOT modify usePreviewViewport in this pass.
-
-Do NOT:
-
-    expose scene/camera/renderer
-    add Raycaster
-    add canvas pointer handlers
-    add TransformControls
-    fork RigWorld
-    create another renderer
-
-We have researched the next step already.
-
-The preferred future architecture is:
-
-    usePreviewViewport(..., optional onPick)
-
-The shared hook performs the raycast because it owns:
-
-    renderer
-    camera
-    Three scene
-    rendered meshes
-
-and reports a stable object identity back to the caller.
-
-RigWorld then maps that identity to:
-
-    rigSelectedIdx
-
-Do not implement it now.
+Do not derive it from stale React state inside the render loop if meshMap has
+the authoritative live transform.
 
 ==================================================
-7. RECORD THE FUTURE PICKING CONTRACT
+8. GIZMO POSITION FOR MULTI-SELECTION
 ==================================================
 
-Add a concise nearby TODO/comment if useful, but no implementation.
+For more than one selected object:
 
-The future implementation should follow these rules:
-
-A. Pointer coordinates MUST use:
-
-    renderer.domElement.getBoundingClientRect()
-
-NOT:
-
-    window.innerWidth
-    window.innerHeight
-
-because the viewport occupies only part of the browser window.
-
-B. Raycast only explicit model pickables.
-
-Do not raycast indiscriminately against:
-
-    grid
-    lights
-    camera helpers
-    bounds helpers
-    future transform handles
-
-C. The pick result must resolve to a stable rig-part identity.
-
-Do not depend solely on arbitrary Three child ordering.
-
-Preferred eventual metadata:
-
-    object.userData.rigPartIdx
-
-or another explicit stable identifier attached when the shared viewport builds
-the object.
-
-Then:
-
-    onPick(identity)
-        ->
-    RigWorld / RIG workspace
-        ->
-    setRigSelectedIdx(...)
-
-D. onPick must be OPTIONAL.
-
-Existing script/shared viewport callers that do not provide it must behave
-exactly as before.
-
-==================================================
-8. IMPORTANT FUTURE DESIGN NOTE
-==================================================
-
-When viewport picking is implemented, do NOT stop at:
-
-    onPick(mesh.name)
-
-unless inspection proves names are guaranteed unique and stable.
-
-The research proposes onPick(name), which is directionally correct, but the
-better contract is an explicit identity owned by the source object.
-
-For RIG that ideally means:
-
-    rig part index
-or
-    stable rig part id
-
-attached as userData to the rendered root/group.
-
-A model filename/name may not uniquely identify a part because the same model
-can legitimately be used by multiple body parts.
+    gizmo position = arithmetic centroid of selected objects' WORLD positions
 
 Example:
 
-    ARM_L -> ARM.MOD
-    ARM_R -> ARM.MOD
+    cx = sum(x) / N
+    cy = sum(y) / N
+    cz = sum(z) / N
 
-Picking ARM.MOD must still identify which arm was clicked.
+This gives the Blender-style MEDIAN visual pivot.
 
-Design for that when the picking pass happens.
+Do not place the gizmo only on selId when several objects are selected.
+
+selId remains the active/anchor object for the OBJECT inspector and existing
+selection logic.
+
+The gizmo is a GROUP-selection affordance.
 
 ==================================================
-9. TRANSFORMCONTROLS REMAINS UNVERIFIED
+9. IMPORTANT LIMITATION: MEDIAN VISUAL PIVOT != FULL BLENDER PIVOT YET
 ==================================================
 
-Do not assume THREE.TransformControls is available merely because three.js
-provides it.
+Do not silently change multi-object rotation/scale semantics in this build.
 
-This app previously found THREE.OrbitControls unavailable in the current build
-environment.
+Current updateObj multi-selection semantics are:
 
-Before the gizmo task, independently verify whether TransformControls is
-actually importable/usable in THIS project.
+MOVE:
+    same positional delta applied to all selected objects
 
-If unavailable, then decide between:
+ROTATE:
+    same rx/ry delta applied to each object's own rotation
 
-    explicit import/addon
+SCALE:
+    each object's own scale multiplied by the same ratio
+
+That means current rotation/scale is effectively:
+
+    individual origins with shared delta
+
+NOT:
+
+    rotate/scale object positions around the median point
+
+Preserve those semantics in this pass.
+
+The gizmo may visually sit at the centroid for consistency, but report this
+limitation clearly.
+
+True Blender median-pivot rotation/scale is a separate later feature requiring:
+
+    relative vector from centroid
+    rotate that vector
+    update x/y/z
+    update object rotation
+    equivalent group-scale position maths
+
+Do not smuggle that geometry change into this UI port.
+
+==================================================
+10. SINGLE CLICK SELECTION MUST UPDATE BOTH selId AND selIds
+==================================================
+
+The existing viewport pick currently does:
+
+    setSelId(hid)
+
+but does not maintain the full multi-selection Set in the same way the layer
+list does.
+
+Fix this while adding the gizmo.
+
+Normal click on viewport object:
+
+    setSelId(hid)
+    setSelIds(new Set([hid]))
+
+CTRL/CMD click:
+
+    toggle hid in selIds
+    set selId = hid when appropriate
+
+SHIFT semantics should NOT conflict with current Shift+drag-Y behaviour.
+
+Do not overload Shift-click range selection in 3D; there is no meaningful
+linear range in viewport space.
+
+Use:
+
+    plain click = single select
+    Ctrl/Cmd click = additive/toggle select
+
+Keep Shift reserved for current Y manipulation unless deliberately changed.
+
+==================================================
+11. EMPTY-SPACE CLICK
+==================================================
+
+When the user clicks empty Scene space WITHOUT beginning orbit:
+
+desired selection behaviour:
+
+    clear selId
+    clear selIds
+    hide gizmo
+
+But be careful not to make every orbit drag deselect unexpectedly.
+
+Recommended:
+
+    distinguish click from drag by movement threshold
+
+For example:
+
+    pointer/mouse down records position
+
+if released with movement < 3-5px and no hit:
+    deselect
+
+if moved:
+    orbit as usual
+    keep selection
+
+Do not destroy selection merely because the user rotates the camera.
+
+==================================================
+12. GIZMO HANDLES TAKE PRIORITY OVER MODEL PICKING
+==================================================
+
+Follow the RIG implementation.
+
+At start of Scene onDown:
+
+A.
+    if gizmo visible:
+        raycast gizmo handles FIRST
+
+B.
+    if handle hit:
+        begin gizmo drag
+        do NOT object-pick
+        do NOT orbit
+        do NOT direct-drag model
+
+C.
+    otherwise:
+        fall through to current model picking logic
+
+Use a:
+
+    _sceneGizmoBusy
+
+or equivalent flag so the camera drag path cannot run simultaneously.
+
+==================================================
+13. PORT THE SCREEN-SPACE AXIS PROJECTION
+==================================================
+
+Reuse the proven RIG method.
+
+For selected axis:
+
+    project gizmo origin to screen
+    project a point +axis to screen
+    subtract
+    normalize
+
+Then project mouse delta onto that screen direction.
+
+This prevents axis motion reversing just because the camera has orbited around
+the object.
+
+Do not invent another drag mapping.
+
+==================================================
+14. ALL GIZMO MUTATION GOES THROUGH updateObj
+==================================================
+
+This is critical.
+
+For one selected anchor id:
+
+MOVE X:
+
+    const obj = objsRef.current.find(...)
+    updateObj(anchorId, 'x', obj.x + delta)
+
+MOVE Y:
+
+    updateObj(anchorId, 'y', obj.y + delta)
+
+MOVE Z:
+
+    updateObj(anchorId, 'z', obj.z + delta)
+
+ROTATE:
+
+    x -> rx
+    y -> ry
+
+Inspect whether rz is supported consistently before exposing Z rotation.
+
+Current updateObj multi-selection whitelist is:
+
+    x, y, z, scale, rx, ry
+
+It does NOT currently include:
+
+    rz
+
+Do not expose a Z rotation handle that only rotates the anchor.
+
+Either:
+
+    add rz safely to updateObj's multi-transform whitelist
+
+if scene objects/generator already support rz,
+
+OR
+
+    temporarily disable Z rotation and report why.
+
+Do not create inconsistent multi-select behaviour.
+
+SCALE:
+
+    updateObj(anchorId, 'scale', newScale)
+
+Because updateObj already handles selIdsRef, the same call applies the correct
+delta/ratio to every selected object.
+
+==================================================
+15. FIX THE EXISTING DIRECT VIEWPORT DRAG PATH
+==================================================
+
+Current X/Z and Y viewport dragging bypasses updateObj.
+
+That contradicts the architecture comment and means multi-selection behaviour
+can diverge between:
+
+    toolbar/gizmo
+    direct drag
+    OBJECT fields
+
+Fix it in this same pass because otherwise we will have two transform engines.
+
+For current X/Z direct drag, instead of directly:
+
+    grp.position...
+    objsRef mutation
+    setScene(...)
+
+calculate nx/nz and call:
+
+    updateObj(dragId, 'x', ...)
+    updateObj(dragId, 'z', ...)
+
+For Shift-Y drag:
+
+    updateObj(dragId, 'y', ...)
+
+Be careful about repeated setState calls during movement.
+
+If two updateObj calls per move for X/Z cause stale-state or double multi-delta
+problems, add a purpose-built:
+
+    updateObjTransform(id, {x, z})
+
+that centralises one transaction.
+
+But do NOT maintain a separate direct-manipulation state writer.
+
+One canonical transform path is the goal.
+
+==================================================
+16. SNAP
+==================================================
+
+Because gizmo MOVE goes through updateObj:
+
+    existing snapOn
+    existing snapStep
+
+should apply automatically.
+
+Do not duplicate snap maths in the gizmo.
+
+This is one of the main reasons to route through updateObj.
+
+Rotation and scale remain unsnapped unless there is a separate intentional
+angle/scale snap feature later.
+
+==================================================
+17. LOCKED / HIDDEN
+==================================================
+
+A selected object that becomes:
+
+    hidden
 or
-    small custom rotation manipulator
+    locked
 
-Do not build a custom gizmo before checking.
+should not retain an interactive gizmo.
 
-==================================================
-10. ACCEPTANCE TEST
-==================================================
+Hide the gizmo when the active selection has no transformable objects.
 
-After this small pass verify:
+If some of a multi-selection are locked, decide explicitly:
 
-1. Select a body part.
+preferred:
+    transform only unlocked selected objects
 
-2. MOVE + X +:
-       one click = +1 X
+But do not change existing locked-selection semantics without inspecting how
+updateObj treats them.
 
-3. Hold +:
-       X continues increasing smoothly
-
-4. Release:
-       changes stop immediately
-
-5. ROTATE + Y:
-       one click = 5 degrees
-       hold repeats
-
-6. SCALE:
-       one click = 0.1
-       hold repeats
-       existing minimum clamp remains intact
-
-7. Switching selected part changes the target.
-
-8. No keyframes are silently created.
-
-9. Playback/scrubbing remains unchanged.
-
-10. RIG BAS output semantics are unchanged.
-
-11. Lossless gate remains unchanged.
-
-12. Script/shared viewport behaviour is unchanged.
+At minimum, do not allow clicking a locked mesh via the viewport; current code
+already correctly excludes it.
 
 ==================================================
-SCOPE
+18. HIGHLIGHT
 ==================================================
 
-This task is ONLY:
+Reuse the existing Scene selection highlighting path if there is one.
 
-    truthful transform-toolbar presentation
-    +
-    click-and-hold nudge
+Do not blindly port RIG emissive highlighting if textured/vertex-colour Scene
+meshes have special material rules.
 
-Do not continue into picking after completing it.
+The source already contains warnings that overlay/highlight material changes
+can interfere with real texture appearance.
 
-Report the exact changes and verification, then stop.
+If Scene does not currently visually highlight selected meshes safely:
+
+    rely on outliner highlight + gizmo initially.
+
+Do not break texture fidelity just to add emissive.
+
+==================================================
+19. DO NOT TOUCH FACE PAINT / TEX STAMP
+==================================================
+
+Current Scene onDown gives special priority to:
+
+    texStampModeRef
+    facePaintModeRef
+
+Preserve that.
+
+When those modes are active:
+
+    gizmo manipulation should be disabled or bypassed
+
+so a click intended for a face does not move the object.
+
+Suggested precedence:
+
+    texture stamp mode
+    face paint mode
+    gizmo
+    object selection/direct drag
+    orbit/pan
+
+Verify this intentionally.
+
+==================================================
+20. DO NOT CHANGE CAMERA IMPLEMENTATION
+==================================================
+
+Preserve:
+
+    orbit
+    fly
+    pan
+    wheel
+    PS2 camera preview
+    keyboard camera controls
+
+Only suppress camera manipulation while a gizmo handle is actively held.
+
+Do not make Scene's camera imitate RIG as part of this task.
+
+==================================================
+21. NO RENDERER MIGRATION
+==================================================
+
+Do not remove Scene's WebGLRenderer.
+
+Do not make App call usePreviewViewport.
+
+Do not alter Forge RIG's renderer.
+
+The two editors now have different requirements:
+
+RIG:
+    lightweight shared preview world
+
+SCENE:
+    primary editing renderer with face/texture/camera-specific tools
+
+Sharing transform UI/gizmo concepts does NOT require sharing renderer ownership.
+
+==================================================
+22. REUSE LOGIC, NOT RENDERER OWNERSHIP
+==================================================
+
+If feasible, extract small pure helpers shared between RIG and SCENE:
+
+    gizmo axis colours
+    screen-axis projection
+    gizmo primitive construction
+
+For example:
+
+    makeTransformGizmo(...)
+    screenAxisDirection(...)
+
+But do not force a large refactor just to share 30 lines.
+
+First get Scene correct.
+
+Then consolidate proven duplicate helpers if useful.
+
+==================================================
+23. MULTI-SELECT ACCEPTANCE TEST
+==================================================
+
+Create three Scene objects.
+
+Select A + B.
+
+Expected:
+
+MOVE:
+    gizmo appears at midpoint of A/B
+    drag X
+    both move same X delta
+    spacing remains unchanged
+
+MOVE with snap:
+    both maintain shape
+    anchor snaps according to updateObj semantics
+
+ROTATE:
+    both receive same rotation delta
+    positions DO NOT orbit the centroid yet
+
+SCALE:
+    both scale by same ratio
+    positions DO NOT spread toward/away from centroid yet
+
+This limitation must be understood and documented.
+
+Then select only C:
+
+    gizmo moves to C
+    transforms only C
+
+==================================================
+24. VIEWPORT SELECTION TEST
+==================================================
+
+Test:
+
+plain click A:
+    selId = A
+    selIds = {A}
+
+Ctrl-click B:
+    selIds = {A,B}
+    active/anchor = B or documented current policy
+
+Ctrl-click A:
+    A toggles out
+
+empty click:
+    clears selection only if it is actually a click, not camera orbit
+
+locked object:
+    clicking goes through it
+
+hidden object:
+    not pickable
+
+==================================================
+25. EXISTING DIRECT DRAG TEST
+==================================================
+
+Before and after this pass:
+
+normal object drag:
+    still moves in X/Z
+
+Shift drag:
+    still moves Y
+
+But AFTER this pass:
+
+    multi-selected objects must follow too
+
+because direct drag now routes through the same canonical update path.
+
+This is a worthwhile fix independent of the gizmo.
+
+==================================================
+26. DO NOT CHANGE EXPORT SEMANTICS
+==================================================
+
+Do not change:
+
+    MOD writer
+    BAS generator
+    object buffer/slot allocation
+    texture pipeline
+    effect semantics
+    scene save format
+
+This is editor manipulation only.
+
+==================================================
+27. REPORT BACK
+==================================================
+
+Return:
+
+1. confirmation Scene already had Raycaster + direct dragging
+2. confirmation there was NO existing transform gizmo
+3. misleading updateObj comment corrected
+4. sceneXform / sceneAxis state
+5. gizmo implementation location
+6. selection centroid implementation
+7. single-select result
+8. multi-select move result
+9. multi-select rotate result
+10. multi-select scale result
+11. whether rz was safely supported
+12. direct drag routed through canonical transform path
+13. snap result
+14. face-paint / stamp regression result
+15. orbit/fly regression result
+16. Scene renderer unchanged
+17. export output unchanged
+
+Do not migrate Scene to usePreviewViewport in this task.
