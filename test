@@ -1,556 +1,308 @@
-Next RIG workspace pass: implement ACTIVE PART SELECTION + COMPACT OUTLINER +
-SELECTED-PART INSPECTOR.
+Do one SMALL, isolated RIG usability pass.
 
-Do NOT implement viewport picking, rotation gizmos, drag-to-retime, bake-to-keys,
-or generator changes in this build.
+Do NOT implement viewport picking or a rotation gizmo in this pass.
 
-This pass is deliberately one coherent structural change.
-
-==================================================
-WHY THIS IS FIRST
-==================================================
-
-The current RIG sidebar renders the full controls for EVERY rig part.
-
-That scales badly:
-
-    6-part preset  -> barely manageable
-    11-part rig    -> wall of controls
-    larger rig     -> unusable
-
-Blender's important pattern is not its styling.
-
-It is:
-
-    SELECT SOMETHING
-          ->
-    EDIT THE ACTIVE THING
-
-We need that model first.
-
-Everything later:
-
-    viewport picking
-    pose-then-key
-    gizmos
-    dope-sheet selection
-    transform inspector
-
-depends on having a canonical active part.
+The viewport-picking research is sound, but it touches shared
+usePreviewViewport infrastructure and should be its own fresh task.
 
 ==================================================
-IMPORTANT: rigPickIdx IS NOT SELECTION
+1. KEEP THE CURRENT TRANSFORM MODEL
 ==================================================
 
-Do NOT reuse:
+The current architecture is now useful groundwork:
 
-    rigPickIdx
+    rigSelectedIdx     = canonical active part
+    rigXform           = move | rotate | scale
+    rigAxis            = x | y | z | null
+    +/-                = applies the selected transform
 
-as the selected body part.
+Do not redesign this.
 
-In the current code rigPickIdx is assignment/picking state:
+Do not merge rigSelectedIdx with rigPickIdx.
 
-    const isPicking = rigPickIdx === i
-
-and it is cleared after model assignment:
-
-    setRigPickIdx(null)
-
-That is a temporary workflow flag, not persistent object selection.
-
-Introduce:
-
-    const [rigSelectedIdx, setRigSelectedIdx] = React.useState(...)
-
-Selection and model assignment must be independent.
-
-Eventually rigPickIdx may become unnecessary, but do not remove it unless its
-current assignment workflow is fully replaced and verified.
+Do not change rig data semantics.
 
 ==================================================
-1. ADD A CANONICAL ACTIVE PART
+2. MAKE THE TOOLBAR HONEST
 ==================================================
 
-Introduce:
+The current toolbar visually risks implying that selecting:
+
+    MOVE
+    ROTATE
+    SCALE
+    X / Y / Z
+
+lets the user manipulate the model directly in the viewport.
+
+It does not.
+
+For now these are NUDGE controls.
+
+Adjust labels/tooltips/microcopy so the interaction is obvious:
+
+    choose transform mode
+    choose axis
+    use + / - to nudge
+
+Do not make it look like a Blender gizmo until viewport dragging actually
+exists.
+
+Keep the compact toolbar.
+
+==================================================
+3. ADD CLICK-AND-HOLD REPEAT TO + / -
+==================================================
+
+Currently +/- performs one step per click.
+
+Make pointer hold repeat the nudge.
+
+Desired behaviour:
+
+    pointerdown
+        apply one step immediately
+
+    short delay (~250-350ms)
+
+    while held
+        repeat at a comfortable rate (~60-100ms)
+
+    pointerup
+    pointercancel
+    pointerleave
+        stop repeating
+
+Mouse and pen should work through pointer events.
+
+Do not create runaway timers.
+
+Always clean up the interval/timeout.
+
+A normal quick click should still produce exactly ONE nudge.
+
+==================================================
+4. KEEP EXISTING STEP SIZES
+==================================================
+
+Do not tune transform semantics in this pass.
+
+Preserve the current values:
+
+    MOVE     1 unit
+    ROTATE   5 degrees
+    SCALE    0.1
+
+Preserve:
+
+    axis selected -> affect that axis
+    no axis       -> existing all-axis behaviour
+
+Do not change stored fields or generator interpretation.
+
+==================================================
+5. DO NOT KEY AUTOMATICALLY
+==================================================
+
+Nudging is editing the current structural/pose values.
+
+Do not silently create keyframes merely because +/- was held.
+
+Existing explicit KEY behaviour remains explicit.
+
+Pose-then-key can come later.
+
+==================================================
+6. NO VIEWPORT PICKING YET
+==================================================
+
+Do NOT modify usePreviewViewport in this pass.
+
+Do NOT:
+
+    expose scene/camera/renderer
+    add Raycaster
+    add canvas pointer handlers
+    add TransformControls
+    fork RigWorld
+    create another renderer
+
+We have researched the next step already.
+
+The preferred future architecture is:
+
+    usePreviewViewport(..., optional onPick)
+
+The shared hook performs the raycast because it owns:
+
+    renderer
+    camera
+    Three scene
+    rendered meshes
+
+and reports a stable object identity back to the caller.
+
+RigWorld then maps that identity to:
 
     rigSelectedIdx
 
-Rules:
-
-    no parts:
-        selected = null
-
-    preset/load creates parts:
-        select part 0 by default
-
-    ADD PART:
-        select newly-added part
-
-    delete selected:
-        select nearest surviving part
-
-    click another part:
-        selection changes
-
-    changing ACTION:
-        selection remains
-
-    scrubbing timeline:
-        selection remains
-
-    playing/stopping:
-        selection remains
-
-Do not couple selection to:
-
-    forgePickFile
-    rigPickIdx
-    rigActionIdx
-    rigFrame
+Do not implement it now.
 
 ==================================================
-2. TURN BODY PARTS INTO A COMPACT OUTLINER
+7. RECORD THE FUTURE PICKING CONTRACT
 ==================================================
 
-Replace the current full editor repeated once per part with a compact list.
+Add a concise nearby TODO/comment if useful, but no implementation.
 
-Each row should show roughly:
+The future implementation should follow these rules:
 
-    [index]  [indent] PART NAME       [model status] [key indicator]
+A. Pointer coordinates MUST use:
+
+    renderer.domElement.getBoundingClientRect()
+
+NOT:
+
+    window.innerWidth
+    window.innerHeight
+
+because the viewport occupies only part of the browser window.
+
+B. Raycast only explicit model pickables.
+
+Do not raycast indiscriminately against:
+
+    grid
+    lights
+    camera helpers
+    bounds helpers
+    future transform handles
+
+C. The pick result must resolve to a stable rig-part identity.
+
+Do not depend solely on arbitrary Three child ordering.
+
+Preferred eventual metadata:
+
+    object.userData.rigPartIdx
+
+or another explicit stable identifier attached when the shared viewport builds
+the object.
+
+Then:
+
+    onPick(identity)
+        ->
+    RigWorld / RIG workspace
+        ->
+    setRigSelectedIdx(...)
+
+D. onPick must be OPTIONAL.
+
+Existing script/shared viewport callers that do not provide it must behave
+exactly as before.
+
+==================================================
+8. IMPORTANT FUTURE DESIGN NOTE
+==================================================
+
+When viewport picking is implemented, do NOT stop at:
+
+    onPick(mesh.name)
+
+unless inspection proves names are guaranteed unique and stable.
+
+The research proposes onPick(name), which is directionally correct, but the
+better contract is an explicit identity owned by the source object.
+
+For RIG that ideally means:
+
+    rig part index
+or
+    stable rig part id
+
+attached as userData to the rendered root/group.
+
+A model filename/name may not uniquely identify a part because the same model
+can legitimately be used by multiple body parts.
 
 Example:
 
-    1  TORSO             ●
-      2  HEAD            ◆
-      3  ARM L           ◆
-      4  ARM R           ◆
-      5  LEG L
-      6  LEG R
+    ARM_L -> ARM.MOD
+    ARM_R -> ARM.MOD
 
-Use parentIdx to indent children.
+Picking ARM.MOD must still identify which arm was clicked.
 
-Do NOT build a sophisticated collapsible tree yet.
-
-A simple visual hierarchy is enough:
-
-    depth = number of parents
-    paddingLeft = depth * small amount
-
-Keep the existing rule:
-
-    parent must refer to an earlier part
-
-No hierarchy semantics change.
+Design for that when the picking pass happens.
 
 ==================================================
-3. KEY INDICATOR
+9. TRANSFORMCONTROLS REMAINS UNVERIFIED
 ==================================================
 
-For each part row, inspect the SELECTED action.
+Do not assume THREE.TransformControls is available merely because three.js
+provides it.
 
-If its track contains keys:
+This app previously found THREE.OrbitControls unavailable in the current build
+environment.
 
-    show ◆
+Before the gizmo task, independently verify whether TransformControls is
+actually importable/usable in THIS project.
 
-If it has procedural animation but no keys:
+If unavailable, then decide between:
 
-    show a small motion indicator such as ~
+    explicit import/addon
+or
+    small custom rotation manipulator
 
-If static:
-
-    no indicator
-
-This makes the outliner useful rather than merely shorter.
-
-Do not make these icons editable in this pass.
-
-==================================================
-4. CLICKING A ROW SELECTS
-==================================================
-
-The entire row should select:
-
-    onClick={() => setRigSelectedIdx(i)}
-
-Selected row receives the existing Forge/RIG accent treatment.
-
-Do not overload clicking the row with:
-
-    assigning models
-    deleting
-    changing parent
-
-Those belong in the inspector.
-
-The user should be able to click rapidly through the hierarchy without
-accidentally editing it.
+Do not build a custom gizmo before checking.
 
 ==================================================
-5. REMOVE FULL CONTROLS FROM EVERY ROW
+10. ACCEPTANCE TEST
 ==================================================
 
-This is the important cleanup.
+After this small pass verify:
 
-Do NOT continue rendering:
+1. Select a body part.
 
-    model assignment
-    parent dropdown
-    offsets
-    scale
-    procedural axis controls
-    keyframe fields
+2. MOVE + X +:
+       one click = +1 X
 
-inside every part row.
+3. Hold +:
+       X continues increasing smoothly
 
-Render those ONCE, below the outliner, for:
+4. Release:
+       changes stop immediately
 
-    rigParts[rigSelectedIdx]
+5. ROTATE + Y:
+       one click = 5 degrees
+       hold repeats
 
-This is the selected-part inspector.
+6. SCALE:
+       one click = 0.1
+       hold repeats
+       existing minimum clamp remains intact
 
-==================================================
-6. SPLIT THE INSPECTOR INTO TWO REGIONS
-==================================================
+7. Switching selected part changes the target.
 
-Inside the SAME 240px right sidebar:
+8. No keyframes are silently created.
 
-    TRANSFORM
-    ANIMATION
+9. Playback/scrubbing remains unchanged.
 
-Do not create another sidebar.
+10. RIG BAS output semantics are unchanged.
 
-Do not change overall Forge panel width.
+11. Lossless gate remains unchanged.
 
---------------------------------
-TRANSFORM
---------------------------------
-
-Contains structure only:
-
-    PART NAME / LABEL
-    MODEL
-    ASSIGN / CLEAR MODEL
-    PARENT
-    OFFSET X
-    OFFSET Y
-    OFFSET Z
-    SCALE
-    DELETE PART
-
-These values describe what the skeleton IS.
-
---------------------------------
-ANIMATION
---------------------------------
-
-Contains motion only for the selected ACTION:
-
-    mode: PROCEDURAL / KEYS
-
-If PROCEDURAL:
-
-    X enabled
-      amplitude
-      speed
-      phase
-
-    Y enabled
-      amplitude
-      speed
-      phase
-
-    Z enabled
-      amplitude
-      speed
-      phase
-
-If KEYS:
-
-    CURRENT FRAME
-    X
-    Y
-    Z
-    KEY
-    CLEAR KEY
-
-Use the existing motionOf / setRigActions / setKeyAt / clearKeyAt logic.
-
-Do NOT redesign the clip data model.
+12. Script/shared viewport behaviour is unchanged.
 
 ==================================================
-7. MODELS SHOULD BECOME PART OF TRANSFORM WORKFLOW
+SCOPE
 ==================================================
 
-The existing MODELS section currently consumes a large standalone region.
+This task is ONLY:
 
-For this pass, keep the available-model picker if necessary, but make the
-workflow clearly target the ACTIVE part.
+    truthful transform-toolbar presentation
+    +
+    click-and-hold nudge
 
-Preferred behaviour:
+Do not continue into picking after completing it.
 
-    select ARM L
-    click/import/select model
-    ASSIGN TO ARM L
-
-The UI should visibly say which part receives the model.
-
-Example:
-
-    MODEL
-    [ BARON_ARM.MOD ▼ ]
-    [ ASSIGN ]
-
-Do not require scrolling down to locate the matching part afterward.
-
-If moving the entire MODELS chooser into the selected inspector is too invasive,
-leave the chooser where it is but make assignment target rigSelectedIdx.
-
-Do not combine this with file-import architecture changes.
-
-==================================================
-8. PRESETS ARE GLOBAL, NOT PART PROPERTIES
-==================================================
-
-PRESETS should remain outside the selected-part inspector.
-
-They replace/create an entire skeleton.
-
-They are not a property of TORSO or ARM L.
-
-Keep them as a compact global section.
-
-Likewise:
-
-    CAMERA
-    ACTIONS
-
-are rig/global state.
-
-Conceptual sidebar order:
-
-    CAMERA
-    PRESETS
-    ACTIONS
-
-    BODY PARTS
-      compact outliner
-
-    TRANSFORM
-      selected part
-
-    ANIMATION
-      selected part / selected action
-
-This already removes most of the current confusion.
-
-==================================================
-9. DOPE SHEET SHOULD FOLLOW SELECTION
-==================================================
-
-Do not redesign the dope sheet.
-
-But make the selected part visually clear there.
-
-The existing dope sheet already has:
-
-    SUMMARY row
-    one row per part
-    diamonds
-    playhead
-
-Add selected-row emphasis:
-
-    selected outliner part
-        ==
-    highlighted dope-sheet row
-
-Clicking a dope-sheet part label may also select that part.
-
-Do NOT implement diamond dragging yet.
-
-Do NOT alter key times in this pass.
-
-==================================================
-10. SELECTION SHOULD EVENTUALLY BE SHARED WITH VIEWPORT
-==================================================
-
-Design rigSelectedIdx as the canonical state that future viewport picking will
-write to.
-
-Future:
-
-    click mesh
-       ->
-    setRigSelectedIdx(partIdx)
-
-For now DO NOT add raycasting.
-
-The outliner is the only selection source needed for this build.
-
-This lets us establish all downstream UI semantics before adding Three.js
-picking complexity.
-
-==================================================
-11. DO NOT ADD A ROTATION GIZMO YET
-==================================================
-
-Pose-then-key is absolutely the desired next-generation workflow.
-
-But it requires:
-
-    selectable viewport objects
-    reliable partIdx -> THREE.Group identity
-    raycasting
-    selection highlighting
-    TransformControls or equivalent
-    local-vs-world rotation semantics
-    temporary pose state
-    writing pose to a key
-    orbit/gizmo pointer conflict handling
-    shared viewport regression testing
-
-That is its own feature.
-
-Do not smuggle half of it into this selection cleanup.
-
-==================================================
-12. NO GENERATOR CHANGES
-==================================================
-
-Do not touch:
-
-    generateRigBAS
-    procedural output
-    keyframe BAS output
-    MODLOAD
-    MODSET
-    MODJOIN
-    MODPOS
-    lossless migration gate
-
-This pass changes editor presentation/state only.
-
-The same rigActions and rigParts must reach the generator afterward.
-
-==================================================
-13. NO DATA MODEL MIGRATION
-==================================================
-
-Do not add fields to persisted rig parts merely for selection.
-
-rigSelectedIdx is editor state.
-
-It does not need to exist in:
-
-    skeleton
-    actions
-    export
-    RIG.BAS
-
-If selection is saved at all, keep it as workspace/UI state, not rig semantics.
-
-==================================================
-14. ACCEPTANCE TEST — 11 PARTS
-==================================================
-
-The real acceptance test is NOT the six-part simple preset.
-
-Load/use the detailed 11-part biped.
-
-Expected:
-
-A.
-    right sidebar remains readable
-
-B.
-    all 11 parts visible simultaneously in compact outliner or with minimal
-    scrolling
-
-C.
-    only ONE part's full controls visible
-
-D.
-    click HEAD
-      -> inspector says HEAD
-
-E.
-    click ARM L
-      -> same inspector immediately edits ARM L
-
-F.
-    changing parent/offset affects only selected part
-
-G.
-    selected action animation controls correspond only to selected part
-
-H.
-    dope-sheet selected row follows selection
-
-I.
-    playing/scrubbing does not lose selection
-
-J.
-    RIG preview behaviour unchanged
-
-K.
-    RIG BAS output unchanged
-
-L.
-    migration/lossless gate remains true
-
-==================================================
-15. VISUAL TARGET
-==================================================
-
-Target layout:
-
-    ┌──────────────────────────────┬──────────────┐
-    │                              │ CAMERA       │
-    │                              │ PRESETS      │
-    │          3D WORLD            │ ACTIONS      │
-    │                              │──────────────│
-    │                              │ BODY PARTS   │
-    │                              │ TORSO      ◆ │
-    │                              │   HEAD     ◆ │
-    │                              │   ARM L    ◆ │
-    │                              │   ARM R    ◆ │
-    ├──────────────────────────────┤   LEG L      │
-    │ DOPE SHEET                   │   LEG R      │
-    │ SUMMARY ◆  ◆      ◆          │──────────────│
-    │ TORSO   ◆       ◆            │ TRANSFORM    │
-    │ ARM L      ◆      ◆          │ model        │
-    │                              │ parent       │
-    │                              │ offset       │
-    │                              │ scale        │
-    │                              │──────────────│
-    │                              │ ANIMATION    │
-    │                              │ selected act │
-    │                              │ controls     │
-    └──────────────────────────────┴──────────────┘
-
-The 240px width can remain.
-
-The problem is not primarily width.
-
-The problem is that the current sidebar repeats every editor for every part.
-
-==================================================
-16. REPORT BACK
-==================================================
-
-Return:
-
-1. new rigSelectedIdx state
-2. confirmation rigPickIdx remains separate
-3. compact hierarchy/outliner implementation
-4. hierarchy depth calculation
-5. selected key/procedural indicator
-6. selected TRANSFORM inspector
-7. selected ANIMATION inspector
-8. dope-sheet selection linkage
-9. 11-part usability result
-10. BAS before/after equality
-11. lossless gate result
-
-Do not start viewport gizmos after finishing this task.
-Stop after the selection/inspector refactor is verified.
+Report the exact changes and verification, then stop.
