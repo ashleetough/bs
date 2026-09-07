@@ -1,742 +1,541 @@
-We now have enough evidence to scope the SCENE transform-toolbar/gizmo pass
-correctly.
+ROOT CAUSE FOUND IN THE CURRENT BUILD.
 
-IMPORTANT CORRECTION:
+Do not change updateObj, syncXform, renderer reset logic, scale maths, or
+rotation maths yet.
 
-SCENE does NOT have a Blender-style transform gizmo.
+The new Scene toolbar acts on:
 
-But it DOES already have:
+    selIds
 
-    viewport raycast picking
-    direct object dragging
-    X/Z drag on normal left-drag
-    Y drag via Shift+drag
-    orbit / fly / pan
-    face-paint picking
-    texture-stamp picking
+but viewport picking currently updates only:
 
-So this is NOT "build picking from scratch".
+    selId
 
-And it is NOT "migrate Scene onto usePreviewViewport first".
+Therefore clicking a model in the viewport can produce:
 
-We should extend the EXISTING App scene renderer with the RIG-style gizmo.
+    selId   = "object123"
+    selIds  = Set(0)
 
-==================================================
-1. DO NOT MIGRATE SCENE TO usePreviewViewport
-==================================================
+The model appears selected and the OLD direct-drag path still moves it, but:
 
-Keep Scene on its existing App-owned THREE renderer.
+    selIds.forEach(...)
 
-The Scene renderer already owns many Scene-specific behaviours:
+inside the toolbar executes ZERO times.
 
-    meshMap
-    decorMap
-    Raycaster
-    face paint
-    texture stamp face picking
-    locked/hidden pick filtering
-    X/Z direct dragging
-    Shift+drag Y
-    orbit camera
-    fly camera
-    PS2 camera preview
-    sky/decor helpers
-    point lights
-    camera gizmos
-    snapping interaction
-
-Migrating all of that into usePreviewViewport is a much larger project than
-adding transform handles.
-
-It would also put the application's PRIMARY editor through a renderer migration
-solely to inherit a gizmo.
-
-Do not do that.
+This perfectly explains why the user can perceive MOVE as working through
+viewport dragging while ROTATE/SCALE +/- do nothing.
 
 ==================================================
-2. CORRECT THE MISLEADING COMMENT
+1. CONFIRMED CURRENT CODE
 ==================================================
 
-Current updateObj comment says:
+Scene viewport picking currently has:
 
-    every path that moves an object goes through updateObj —
-    the viewport gizmo, the OBJECT tab fields and the context menu alike
+    if (hits.length) {
+        const hid = hits[0].object.userData.gid;
+        selRef.current = hid;
+        setSelId(hid);
+        dragMode = e.shiftKey ? "dragY" : "drag";
+        dragId = hid;
+        ...
+    }
 
-That is currently false.
+It does NOT update:
 
-There is no Scene gizmo.
+    setSelIds(...)
 
-And the current viewport drag directly does:
+The toolbar, however, does:
 
-    grp.position...
-    objsRef.current mutation
-    setScene(...)
+    selIds.forEach(id => {
+        ...
+        updateObj(...)
+    })
 
-rather than calling updateObj.
-
-Correct the comment as part of this pass.
-
-More importantly, do not build the new gizmo using another direct state-writing
-path.
-
-The new gizmo MUST call updateObj.
-
-==================================================
-3. CURRENT SCENE PICKING IS ALREADY GOOD
-==================================================
-
-Reuse the existing Scene raycaster.
-
-It already does:
-
-    const r = mount.getBoundingClientRect()
-
-    mouse2d.x = ...
-    mouse2d.y = ...
-
-and raycasts only actual model meshes collected from meshMap.
-
-It also correctly excludes:
-
-    hidden layers
-    locked layers
-    noSelect meshes
-
-Do not create a second independent picking system.
-
-Extend the existing onDown path.
+So the two selection systems are out of sync.
 
 ==================================================
-4. ADD SCENE TRANSFORM STATE
+2. FIX VIEWPORT SELECTION FIRST
 ==================================================
 
-Introduce editor-only Scene transform state, analogous to RIG:
+On a normal viewport click of a model, make the selection state consistent:
 
-    sceneXform = 'move' | 'rotate' | 'scale'
-    sceneAxis  = null | 'x' | 'y' | 'z'
+    selRef.current = hid;
+    setSelId(hid);
+    setSelIds(new Set([hid]));
 
-These are UI/editor state only.
+That should be the default plain-click behaviour.
 
-Do not persist them into scene objects or BAS.
-
-Default:
-
-    move
-    axis null
+Do not leave selId and selIds representing two different selections.
 
 ==================================================
-5. PORT THE RIG TOOLBAR VISUALLY
+3. ADD CTRL/CMD MULTI-SELECT CORRECTLY
 ==================================================
 
-Add the same compact transform toolbar in the Scene viewport:
+Since Scene already supports multi-select in the layer list, viewport picking
+should follow the same conceptual rules.
 
-    MOVE
-    ROTATE
-    SCALE
+Plain click:
 
-    X
-    Y
-    Z
+    selId = hid
+    selIds = { hid }
 
-Use the same icons, dimensions and general styling as RIG so the application
-has one transform language.
-
-Do not keep two unrelated transform tool designs.
-
-If RIG has +/- nudge controls, Scene may have them too, but wire them through
-updateObj and current selection.
-
-==================================================
-6. ADD ONE GIZMO TO THE EXISTING SCENE THREE SCENE
-==================================================
-
-Inside the App scene renderer setup, create:
-
-    const transformGizmo = new THREE.Group()
-
-Add it to the existing THREE scene.
-
-Reuse/adapt the RIG primitive approach:
-
-MOVE:
-    three axis arrows
-
-ROTATE:
-    three axis rings
-
-SCALE:
-    three endpoint cubes
-
-Do NOT import TransformControls.
-
-The RIG primitive gizmo is already working and proven in this exact application.
-
-Use the same:
-
-    axis colours
-    depthTest:false
-    high renderOrder
-    gizmoAxis metadata
-    screen-space drag projection
-
-Do not fork the maths unnecessarily.
-
-==================================================
-7. GIZMO POSITION FOR SINGLE SELECTION
-==================================================
-
-For one selected object:
-
-    gizmo.position = selected object's world position
-
-Use the live mesh group's position where appropriate so the gizmo matches what
-the user sees.
-
-Do not derive it from stale React state inside the render loop if meshMap has
-the authoritative live transform.
-
-==================================================
-8. GIZMO POSITION FOR MULTI-SELECTION
-==================================================
-
-For more than one selected object:
-
-    gizmo position = arithmetic centroid of selected objects' WORLD positions
-
-Example:
-
-    cx = sum(x) / N
-    cy = sum(y) / N
-    cz = sum(z) / N
-
-This gives the Blender-style MEDIAN visual pivot.
-
-Do not place the gizmo only on selId when several objects are selected.
-
-selId remains the active/anchor object for the OBJECT inspector and existing
-selection logic.
-
-The gizmo is a GROUP-selection affordance.
-
-==================================================
-9. IMPORTANT LIMITATION: MEDIAN VISUAL PIVOT != FULL BLENDER PIVOT YET
-==================================================
-
-Do not silently change multi-object rotation/scale semantics in this build.
-
-Current updateObj multi-selection semantics are:
-
-MOVE:
-    same positional delta applied to all selected objects
-
-ROTATE:
-    same rx/ry delta applied to each object's own rotation
-
-SCALE:
-    each object's own scale multiplied by the same ratio
-
-That means current rotation/scale is effectively:
-
-    individual origins with shared delta
-
-NOT:
-
-    rotate/scale object positions around the median point
-
-Preserve those semantics in this pass.
-
-The gizmo may visually sit at the centroid for consistency, but report this
-limitation clearly.
-
-True Blender median-pivot rotation/scale is a separate later feature requiring:
-
-    relative vector from centroid
-    rotate that vector
-    update x/y/z
-    update object rotation
-    equivalent group-scale position maths
-
-Do not smuggle that geometry change into this UI port.
-
-==================================================
-10. SINGLE CLICK SELECTION MUST UPDATE BOTH selId AND selIds
-==================================================
-
-The existing viewport pick currently does:
-
-    setSelId(hid)
-
-but does not maintain the full multi-selection Set in the same way the layer
-list does.
-
-Fix this while adding the gizmo.
-
-Normal click on viewport object:
-
-    setSelId(hid)
-    setSelIds(new Set([hid]))
-
-CTRL/CMD click:
+Ctrl/Cmd click:
 
     toggle hid in selIds
-    set selId = hid when appropriate
 
-SHIFT semantics should NOT conflict with current Shift+drag-Y behaviour.
+Suggested behaviour:
 
-Do not overload Shift-click range selection in 3D; there is no meaningful
-linear range in viewport space.
+    setSelIds(prev => {
+        const next = new Set(prev);
+        if (next.has(hid)) next.delete(hid);
+        else next.add(hid);
+        return next;
+    });
+
+Then decide active anchor explicitly:
+
+If adding:
+    setSelId(hid)
+    selRef.current = hid
+
+If removing the active anchor:
+    choose another remaining selected id or null
+
+Do not leave:
+
+    selId points to an object no longer in selIds.
+
+==================================================
+4. SHIFT IS ALREADY USED FOR Y DRAG
+==================================================
+
+Do not use Shift for viewport multi-select right now.
+
+Current viewport interaction already means:
+
+    normal drag       = X/Z
+    Shift + drag      = Y
+
+Keep that behaviour.
 
 Use:
 
-    plain click = single select
-    Ctrl/Cmd click = additive/toggle select
+    Ctrl / Cmd
 
-Keep Shift reserved for current Y manipulation unless deliberately changed.
-
-==================================================
-11. EMPTY-SPACE CLICK
-==================================================
-
-When the user clicks empty Scene space WITHOUT beginning orbit:
-
-desired selection behaviour:
-
-    clear selId
-    clear selIds
-    hide gizmo
-
-But be careful not to make every orbit drag deselect unexpectedly.
-
-Recommended:
-
-    distinguish click from drag by movement threshold
-
-For example:
-
-    pointer/mouse down records position
-
-if released with movement < 3-5px and no hit:
-    deselect
-
-if moved:
-    orbit as usual
-    keep selection
-
-Do not destroy selection merely because the user rotates the camera.
+for additive viewport selection.
 
 ==================================================
-12. GIZMO HANDLES TAKE PRIORITY OVER MODEL PICKING
+5. VERIFY THE DIAGNOSTIC BEFORE ANY OTHER CHANGE
 ==================================================
 
-Follow the RIG implementation.
-
-At start of Scene onDown:
-
-A.
-    if gizmo visible:
-        raycast gizmo handles FIRST
-
-B.
-    if handle hit:
-        begin gizmo drag
-        do NOT object-pick
-        do NOT orbit
-        do NOT direct-drag model
-
-C.
-    otherwise:
-        fall through to current model picking logic
-
-Use a:
-
-    _sceneGizmoBusy
-
-or equivalent flag so the camera drag path cannot run simultaneously.
-
-==================================================
-13. PORT THE SCREEN-SPACE AXIS PROJECTION
-==================================================
-
-Reuse the proven RIG method.
-
-For selected axis:
-
-    project gizmo origin to screen
-    project a point +axis to screen
-    subtract
-    normalize
-
-Then project mouse delta onto that screen direction.
-
-This prevents axis motion reversing just because the camera has orbited around
-the object.
-
-Do not invent another drag mapping.
-
-==================================================
-14. ALL GIZMO MUTATION GOES THROUGH updateObj
-==================================================
-
-This is critical.
-
-For one selected anchor id:
-
-MOVE X:
-
-    const obj = objsRef.current.find(...)
-    updateObj(anchorId, 'x', obj.x + delta)
-
-MOVE Y:
-
-    updateObj(anchorId, 'y', obj.y + delta)
-
-MOVE Z:
-
-    updateObj(anchorId, 'z', obj.z + delta)
-
-ROTATE:
-
-    x -> rx
-    y -> ry
-
-Inspect whether rz is supported consistently before exposing Z rotation.
-
-Current updateObj multi-selection whitelist is:
-
-    x, y, z, scale, rx, ry
-
-It does NOT currently include:
-
-    rz
-
-Do not expose a Z rotation handle that only rotates the anchor.
-
-Either:
-
-    add rz safely to updateObj's multi-transform whitelist
-
-if scene objects/generator already support rz,
-
-OR
-
-    temporarily disable Z rotation and report why.
-
-Do not create inconsistent multi-select behaviour.
-
-SCALE:
-
-    updateObj(anchorId, 'scale', newScale)
-
-Because updateObj already handles selIdsRef, the same call applies the correct
-delta/ratio to every selected object.
-
-==================================================
-15. FIX THE EXISTING DIRECT VIEWPORT DRAG PATH
-==================================================
-
-Current X/Z and Y viewport dragging bypasses updateObj.
-
-That contradicts the architecture comment and means multi-selection behaviour
-can diverge between:
-
-    toolbar/gizmo
-    direct drag
-    OBJECT fields
-
-Fix it in this same pass because otherwise we will have two transform engines.
-
-For current X/Z direct drag, instead of directly:
-
-    grp.position...
-    objsRef mutation
-    setScene(...)
-
-calculate nx/nz and call:
-
-    updateObj(dragId, 'x', ...)
-    updateObj(dragId, 'z', ...)
-
-For Shift-Y drag:
-
-    updateObj(dragId, 'y', ...)
-
-Be careful about repeated setState calls during movement.
-
-If two updateObj calls per move for X/Z cause stale-state or double multi-delta
-problems, add a purpose-built:
-
-    updateObjTransform(id, {x, z})
-
-that centralises one transaction.
-
-But do NOT maintain a separate direct-manipulation state writer.
-
-One canonical transform path is the goal.
-
-==================================================
-16. SNAP
-==================================================
-
-Because gizmo MOVE goes through updateObj:
-
-    existing snapOn
-    existing snapStep
-
-should apply automatically.
-
-Do not duplicate snap maths in the gizmo.
-
-This is one of the main reasons to route through updateObj.
-
-Rotation and scale remain unsnapped unless there is a separate intentional
-angle/scale snap feature later.
-
-==================================================
-17. LOCKED / HIDDEN
-==================================================
-
-A selected object that becomes:
-
-    hidden
-or
-    locked
-
-should not retain an interactive gizmo.
-
-Hide the gizmo when the active selection has no transformable objects.
-
-If some of a multi-selection are locked, decide explicitly:
-
-preferred:
-    transform only unlocked selected objects
-
-But do not change existing locked-selection semantics without inspecting how
-updateObj treats them.
-
-At minimum, do not allow clicking a locked mesh via the viewport; current code
-already correctly excludes it.
-
-==================================================
-18. HIGHLIGHT
-==================================================
-
-Reuse the existing Scene selection highlighting path if there is one.
-
-Do not blindly port RIG emissive highlighting if textured/vertex-colour Scene
-meshes have special material rules.
-
-The source already contains warnings that overlay/highlight material changes
-can interfere with real texture appearance.
-
-If Scene does not currently visually highlight selected meshes safely:
-
-    rely on outliner highlight + gizmo initially.
-
-Do not break texture fidelity just to add emissive.
-
-==================================================
-19. DO NOT TOUCH FACE PAINT / TEX STAMP
-==================================================
-
-Current Scene onDown gives special priority to:
-
-    texStampModeRef
-    facePaintModeRef
-
-Preserve that.
-
-When those modes are active:
-
-    gizmo manipulation should be disabled or bypassed
-
-so a click intended for a face does not move the object.
-
-Suggested precedence:
-
-    texture stamp mode
-    face paint mode
-    gizmo
-    object selection/direct drag
-    orbit/pan
-
-Verify this intentionally.
-
-==================================================
-20. DO NOT CHANGE CAMERA IMPLEMENTATION
-==================================================
-
-Preserve:
-
-    orbit
-    fly
-    pan
-    wheel
-    PS2 camera preview
-    keyboard camera controls
-
-Only suppress camera manipulation while a gizmo handle is actively held.
-
-Do not make Scene's camera imitate RIG as part of this task.
-
-==================================================
-21. NO RENDERER MIGRATION
-==================================================
-
-Do not remove Scene's WebGLRenderer.
-
-Do not make App call usePreviewViewport.
-
-Do not alter Forge RIG's renderer.
-
-The two editors now have different requirements:
-
-RIG:
-    lightweight shared preview world
-
-SCENE:
-    primary editing renderer with face/texture/camera-specific tools
-
-Sharing transform UI/gizmo concepts does NOT require sharing renderer ownership.
-
-==================================================
-22. REUSE LOGIC, NOT RENDERER OWNERSHIP
-==================================================
-
-If feasible, extract small pure helpers shared between RIG and SCENE:
-
-    gizmo axis colours
-    screen-axis projection
-    gizmo primitive construction
-
-For example:
-
-    makeTransformGizmo(...)
-    screenAxisDirection(...)
-
-But do not force a large refactor just to share 30 lines.
-
-First get Scene correct.
-
-Then consolidate proven duplicate helpers if useful.
-
-==================================================
-23. MULTI-SELECT ACCEPTANCE TEST
-==================================================
-
-Create three Scene objects.
-
-Select A + B.
+After this fix:
+
+1. click ONE object in viewport
+2. do not drag it
+3. inspect/log:
+
+    selId
+    selIds.size
+    [...selIds]
 
 Expected:
 
-MOVE:
-    gizmo appears at midpoint of A/B
-    drag X
-    both move same X delta
-    spacing remains unchanged
+    selId = clicked id
+    selIds.size = 1
+    selIds = [clicked id]
 
-MOVE with snap:
-    both maintain shape
-    anchor snaps according to updateObj semantics
+Then click:
 
-ROTATE:
-    both receive same rotation delta
-    positions DO NOT orbit the centroid yet
+    ROTATE
+    X
+    +
 
-SCALE:
-    both scale by same ratio
-    positions DO NOT spread toward/away from centroid yet
+Expected console:
 
-This limitation must be understood and documented.
+    [SCENE nudge] rotate axis x sel 1 step 5
+    [SCENE nudge] <id> rx 0 -> 5
 
-Then select only C:
+And the mesh must visibly rotate 5 degrees.
 
-    gizmo moves to C
-    transforms only C
+Then:
 
-==================================================
-24. VIEWPORT SELECTION TEST
-==================================================
+    SCALE
+    +
 
-Test:
+Expected:
 
-plain click A:
-    selId = A
-    selIds = {A}
+    [SCENE nudge] scale axis ... sel 1 step 0.1
+    [SCENE nudge] scale <id> 1 -> 1.1
 
-Ctrl-click B:
-    selIds = {A,B}
-    active/anchor = B or documented current policy
-
-Ctrl-click A:
-    A toggles out
-
-empty click:
-    clears selection only if it is actually a click, not camera orbit
-
-locked object:
-    clicking goes through it
-
-hidden object:
-    not pickable
+and the mesh grows.
 
 ==================================================
-25. EXISTING DIRECT DRAG TEST
+6. DO NOT CALL syncXformRef DIRECTLY FROM TOOLBAR
 ==================================================
 
-Before and after this pass:
+The toolbar should continue calling:
 
-normal object drag:
-    still moves in X/Z
+    updateObj(...)
 
-Shift drag:
-    still moves Y
+Do NOT add:
 
-But AFTER this pass:
+    syncXformRef.current(...)
 
-    multi-selected objects must follow too
+after every toolbar action.
 
-because direct drag now routes through the same canonical update path.
+That would create a second refresh path unnecessarily.
 
-This is a worthwhile fix independent of the gizmo.
+The current single-object updateObj path already does:
 
-==================================================
-26. DO NOT CHANGE EXPORT SEMANTICS
-==================================================
+    const u = {...o, [key]: val};
+    syncXform(u);
+    return u;
 
-Do not change:
+and syncXform does:
 
-    MOD writer
-    BAS generator
-    object buffer/slot allocation
-    texture pipeline
-    effect semantics
-    scene save format
+    grp.position.set(...)
+    grp.scale.setScalar(...)
+    grp.rotation.set(...)
 
-This is editor manipulation only.
+So updateObj is already sufficient once the handler actually calls it.
 
 ==================================================
-27. REPORT BACK
+7. THERE IS ONLY ONE updateObj DEFINITION
+==================================================
+
+The current file contains one relevant definition:
+
+    const updateObj = useCallback(...)
+
+Do not keep searching for a shadow implementation.
+
+The bug is upstream: the toolbar has no ids to iterate after viewport selection.
+
+==================================================
+8. WHY MOVE WAS MISLEADING
+==================================================
+
+Do not use "I can move it in the viewport" as evidence that the MOVE +/- button
+works.
+
+The viewport still has its older direct manipulation path:
+
+    click object
+      ->
+    dragMode = "drag" / "dragY"
+
+and that path changes the object directly.
+
+So there are currently two independent behaviours:
+
+A. viewport drag
+    works from selId / dragId
+
+B. toolbar nudge
+    works from selIds
+
+If viewport selection fills only selId:
+
+    A works
+    B is dead
+
+That is exactly the observed situation.
+
+==================================================
+9. MAKE THE TOOLBAR'S EMPTY STATE TRUTHFUL
+==================================================
+
+The toolbar is always rendered and currently only lowers opacity when:
+
+    selIds.size === 0
+
+That made this bug harder to recognize because active-looking buttons could
+still be clicked while they had no targets.
+
+Keep the toolbar visible for discoverability, but when selIds.size === 0:
+
+    show SELECT
+or
+    disable +/- pointer interaction
+
+Preferred:
+
+    mode buttons remain usable
+    +/- disabled
+    label says SELECT OBJECT
+
+Then when selection exists:
+
+    label = NUDGE
+    +/- enabled
+
+Do not allow a silent no-op state.
+
+==================================================
+10. ADD A TEMPORARY INVARIANT
+==================================================
+
+During this pass, add a development diagnostic:
+
+    if (selId && !selIds.has(selId)) {
+        console.warn('[SCENE selection] active id missing from selIds',
+                     selId, [...selIds]);
+    }
+
+Do not auto-fix it inside a render effect.
+
+Fix every selection mutation path that causes it.
+
+This should help find any other old code that still sets only selId.
+
+==================================================
+11. AUDIT EVERY setSelId CALL THAT MEANS "SELECT THIS OBJECT"
+==================================================
+
+The file has several setSelId call sites.
+
+Do NOT mechanically add setSelIds everywhere.
+
+Classify them.
+
+For places that genuinely mean:
+
+    user selected / newly active object
+
+ensure selIds is also correct.
+
+Examples likely needing review:
+
+    addToScene
+    duplicate
+    viewport click
+    load/import selection
+    primitive creation
+
+For places that only maintain the anchor while an existing multi-selection is
+preserved, do not collapse the Set accidentally.
+
+The layer-list path already has explicit multi-select logic and should remain
+the reference.
+
+==================================================
+12. SPECIFIC VIEWPORT SELECTION IMPLEMENTATION
+==================================================
+
+A safe first version:
+
+    if (hits.length) {
+        const hid = hits[0].object.userData.gid;
+
+        if (e.ctrlKey || e.metaKey) {
+            setSelIds(prev => {
+                const next = new Set(prev);
+
+                if (next.has(hid)) {
+                    next.delete(hid);
+
+                    if (selRef.current === hid) {
+                        const replacement = next.values().next().value ?? null;
+                        selRef.current = replacement;
+                        setSelId(replacement);
+                    }
+                } else {
+                    next.add(hid);
+                    selRef.current = hid;
+                    setSelId(hid);
+                }
+
+                return next;
+            });
+        } else {
+            selRef.current = hid;
+            setSelId(hid);
+            setSelIds(new Set([hid]));
+        }
+
+        ...
+    }
+
+Do not necessarily copy this verbatim if existing selection helpers can express
+the same policy more cleanly.
+
+Prefer one canonical selection helper if possible.
+
+==================================================
+13. AFTER SELECTION FIX, TEST +/- SPECIFICALLY
+==================================================
+
+Do not drag the model during this test.
+
+Start from a known object:
+
+    x=0
+    rx=0
+    ry=0
+    scale=1
+
+Then:
+
+MOVE / X / +
+    x -> 1
+
+ROTATE / X / +
+    rx -> 5
+
+ROTATE / Y / +
+    ry -> 5
+
+SCALE / +
+    scale -> 1.1
+
+Check BOTH:
+
+    React scene object values
+    live THREE group transform
+
+Expected THREE values:
+
+    position.x = 1
+    rotation.x ≈ 0.087266
+    rotation.y ≈ 0.087266
+    scale.x/y/z = 1.1
+
+This is a much stronger test than "looks different".
+
+==================================================
+14. IF ROTATE/SCALE STILL FAIL AFTER selIds=1
+==================================================
+
+ONLY THEN investigate downstream.
+
+At that point log immediately before and after updateObj:
+
+    state object:
+        rx / ry / scale
+
+    live group:
+        rotation.x / rotation.y / scale.x
+
+If state changes but live group does not:
+
+    inspect syncXform / render-loop reset.
+
+If state does not change:
+
+    inspect updateObj.
+
+But do not skip to that branch while:
+
+    selIds.size === 0
+
+because no transform function is being called at all.
+
+==================================================
+15. EFFECT RESET BLOCK IS NOT THE FIRST SUSPECT
+==================================================
+
+There is a per-frame reset block that restores:
+
+    rotation from obj.rx / obj.ry
+    scale from obj.scale
+
+when no effect owns those components.
+
+That is actually compatible with toolbar edits PROVIDED the scene state changed,
+because the reset uses the stored values.
+
+So do not alter the effect guards merely to make toolbar rotation/scale persist.
+
+If updateObj writes:
+
+    obj.rx = 5
+
+then the reset should restore to 5 degrees, not zero.
+
+Likewise:
+
+    obj.scale = 1.1
+
+should reset to 1.1.
+
+Only revisit this if measured state and rendered group disagree.
+
+==================================================
+16. DO NOT ROUTE TOOLBAR THROUGH DIRECT DRAG
+==================================================
+
+The direct viewport drag path bypassing updateObj is a separate architectural
+cleanup.
+
+It should eventually be unified.
+
+But do NOT fix that simultaneously with this bug.
+
+First prove:
+
+    viewport click
+      ->
+    selIds populated
+      ->
+    toolbar updateObj works
+
+Then handle direct-drag unification separately.
+
+One variable at a time.
+
+==================================================
+17. ACCEPTANCE TEST
+==================================================
+
+PASS only if:
+
+A.
+    viewport plain-click:
+        selId == id
+        selIds == {id}
+
+B.
+    MOVE +/- works without dragging
+
+C.
+    ROTATE X +/- works
+
+D.
+    ROTATE Y +/- works
+
+E.
+    SCALE +/- works
+
+F.
+    ctrl-click adds second object
+
+G.
+    transform on selection affects both according to current updateObj semantics
+
+H.
+    layer-list selection still works
+
+I.
+    direct viewport drag still works
+
+J.
+    no generator/export changes
+
+==================================================
+REPORT BACK
 ==================================================
 
 Return:
 
-1. confirmation Scene already had Raycaster + direct dragging
-2. confirmation there was NO existing transform gizmo
-3. misleading updateObj comment corrected
-4. sceneXform / sceneAxis state
-5. gizmo implementation location
-6. selection centroid implementation
-7. single-select result
-8. multi-select move result
-9. multi-select rotate result
-10. multi-select scale result
-11. whether rz was safely supported
-12. direct drag routed through canonical transform path
-13. snap result
-14. face-paint / stamp regression result
-15. orbit/fly regression result
-16. Scene renderer unchanged
-17. export output unchanged
+1. selId immediately after viewport click
+2. selIds immediately after viewport click
+3. whether old code updated only selId
+4. MOVE +/- result without dragging
+5. ROTATE X +/- state + THREE group result
+6. ROTATE Y +/- state + THREE group result
+7. SCALE +/- state + THREE group result
+8. multi-select result
+9. any remaining active-id / Set mismatch warnings
 
-Do not migrate Scene to usePreviewViewport in this task.
+Do not make another transform-maths change until this selection invariant is
+fixed and tested.
