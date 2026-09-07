@@ -1,541 +1,506 @@
-ROOT CAUSE FOUND IN THE CURRENT BUILD.
+STOP CHANGING THE SCENE TRANSFORM IMPLEMENTATION.
 
-Do not change updateObj, syncXform, renderer reset logic, scale maths, or
-rotation maths yet.
+We have now made six changes based on six plausible diagnoses without changing
+the reported symptom.
 
-The new Scene toolbar acts on:
+The next pass is DIAGNOSTIC ONLY.
 
-    selIds
-
-but viewport picking currently updates only:
-
-    selId
-
-Therefore clicking a model in the viewport can produce:
-
-    selId   = "object123"
-    selIds  = Set(0)
-
-The model appears selected and the OLD direct-drag path still moves it, but:
-
-    selIds.forEach(...)
-
-inside the toolbar executes ZERO times.
-
-This perfectly explains why the user can perceive MOVE as working through
-viewport dragging while ROTATE/SCALE +/- do nothing.
+Do not modify updateObj, syncXform, selection semantics, transform maths,
+renderer lifecycle, canvas stacking, pointerEvents, or the toolbar implementation
+until the runtime observation below identifies which layer is failing.
 
 ==================================================
-1. CONFIRMED CURRENT CODE
+GOAL
 ==================================================
 
-Scene viewport picking currently has:
+Determine exactly where the Scene toolbar interaction stops:
 
-    if (hits.length) {
-        const hid = hits[0].object.userData.gid;
-        selRef.current = hid;
-        setSelId(hid);
-        dragMode = e.shiftKey ? "dragY" : "drag";
-        dragId = hid;
-        ...
-    }
+    browser pointer event
+        ↓
+    React toolbar onClick
+        ↓
+    selection available
+        ↓
+    nudge handler
+        ↓
+    updateObj
+        ↓
+    scene state
+        ↓
+    syncXform
+        ↓
+    THREE mesh
 
-It does NOT update:
-
-    setSelIds(...)
-
-The toolbar, however, does:
-
-    selIds.forEach(id => {
-        ...
-        updateObj(...)
-    })
-
-So the two selection systems are out of sync.
+We need the FIRST failed boundary.
 
 ==================================================
-2. FIX VIEWPORT SELECTION FIRST
+TEST 1 — DOES REACT RECEIVE THE TOOLBAR CLICK?
 ==================================================
 
-On a normal viewport click of a model, make the selection state consistent:
+Temporarily make the ROTATE mode button handler:
 
-    selRef.current = hid;
-    setSelId(hid);
-    setSelIds(new Set([hid]));
+    onClick={(e) => {
+        console.log('[SCENE TOOLBAR] ROTATE CLICK', {
+            target: e.target,
+            currentTarget: e.currentTarget,
+            selCount: selIds.size
+        });
+        setSceneXform('rotate');
+    }}
 
-That should be the default plain-click behaviour.
-
-Do not leave selId and selIds representing two different selections.
-
-==================================================
-3. ADD CTRL/CMD MULTI-SELECT CORRECTLY
-==================================================
-
-Since Scene already supports multi-select in the layer list, viewport picking
-should follow the same conceptual rules.
-
-Plain click:
-
-    selId = hid
-    selIds = { hid }
-
-Ctrl/Cmd click:
-
-    toggle hid in selIds
-
-Suggested behaviour:
-
-    setSelIds(prev => {
-        const next = new Set(prev);
-        if (next.has(hid)) next.delete(hid);
-        else next.add(hid);
-        return next;
-    });
-
-Then decide active anchor explicitly:
-
-If adding:
-    setSelId(hid)
-    selRef.current = hid
-
-If removing the active anchor:
-    choose another remaining selected id or null
-
-Do not leave:
-
-    selId points to an object no longer in selIds.
-
-==================================================
-4. SHIFT IS ALREADY USED FOR Y DRAG
-==================================================
-
-Do not use Shift for viewport multi-select right now.
-
-Current viewport interaction already means:
-
-    normal drag       = X/Z
-    Shift + drag      = Y
-
-Keep that behaviour.
-
-Use:
-
-    Ctrl / Cmd
-
-for additive viewport selection.
-
-==================================================
-5. VERIFY THE DIAGNOSTIC BEFORE ANY OTHER CHANGE
-==================================================
-
-After this fix:
-
-1. click ONE object in viewport
-2. do not drag it
-3. inspect/log:
-
-    selId
-    selIds.size
-    [...selIds]
-
-Expected:
-
-    selId = clicked id
-    selIds.size = 1
-    selIds = [clicked id]
-
-Then click:
-
-    ROTATE
-    X
-    +
-
-Expected console:
-
-    [SCENE nudge] rotate axis x sel 1 step 5
-    [SCENE nudge] <id> rx 0 -> 5
-
-And the mesh must visibly rotate 5 degrees.
-
-Then:
+Do the equivalent minimal log for:
 
     SCALE
-    +
+    X axis
+    + button
+
+Do not change behaviour otherwise.
+
+Also add:
+
+    onPointerDown={(e) => {
+        console.log('[SCENE TOOLBAR] POINTER DOWN', e.target);
+    }}
+
+to the OUTER toolbar container.
+
+Run the app and click ROTATE.
+
+There are only two useful outcomes.
+
+--------------------------------------------------
+OUTCOME A
+--------------------------------------------------
+
+No:
+
+    [SCENE TOOLBAR] POINTER DOWN
+
+appears.
+
+STOP.
+
+The transform/state code is irrelevant because the browser event never reaches
+the React toolbar.
+
+Proceed to TEST 2.
+
+--------------------------------------------------
+OUTCOME B
+--------------------------------------------------
+
+POINTER DOWN and ROTATE CLICK appear.
+
+STOP investigating canvas interception.
+
+Proceed directly to TEST 3.
+
+==================================================
+TEST 2 — POINTER HIT TEST / CANVAS STACKING
+==================================================
+
+Only perform this if TEST 1 receives NO toolbar pointer event.
+
+At runtime, inspect:
+
+    document.elementFromPoint(x, y)
+
+using coordinates in the middle of the visible ROTATE button.
+
+Log the result and its ancestry.
+
+Also inspect computed styles for:
+
+    toolbar container
+    rotate button
+    WebGL canvas
+    mountRef div
+
+Specifically record:
+
+    pointer-events
+    position
+    z-index
+
+Do not infer from JSX.
+
+Use the ACTUAL computed DOM state.
+
+Expected healthy result:
+
+    elementFromPoint(button centre)
+
+must resolve to the button or one of its children.
+
+If it resolves to:
+
+    canvas
+
+then we have finally demonstrated the bug.
+
+ONLY THEN fix stacking/pointer ownership.
+
+Preferred minimal fix:
+
+    toolbar:
+        position: absolute
+        zIndex: sufficiently above canvas
+        pointerEvents: 'auto'
+
+and ensure the canvas does not establish a stacking arrangement that places it
+above the controls.
+
+Do NOT set:
+
+    canvas.style.pointerEvents = 'none'
+
+because the Scene viewport requires canvas pointer events for:
+
+    picking
+    dragging
+    orbit
+    pan
+    texture/face interaction
+
+The solution must make the toolbar win only over its own screen area.
+
+After the fix rerun:
+
+    elementFromPoint(button centre)
+
+and require it to return the toolbar/button.
+
+==================================================
+TEST 3 — DOES SELECTION EXIST?
+==================================================
+
+Only perform this if toolbar pointer events ARE reaching React.
+
+Click a model once.
+
+Read the visible toolbar header.
+
+Report EXACTLY:
+
+    SELECT
+
+or:
+
+    NUDGE 1
+
+Do not paraphrase this as "selected".
+
+Also log:
+
+    console.log('[SCENE SEL]', {
+        selId,
+        selIds: [...selIds],
+        size: selIds.size
+    });
 
 Expected:
 
-    [SCENE nudge] scale axis ... sel 1 step 0.1
-    [SCENE nudge] scale <id> 1 -> 1.1
+    selId = clicked object id
+    selIds = [same id]
+    size = 1
 
-and the mesh grows.
+If header remains SELECT / size 0:
 
-==================================================
-6. DO NOT CALL syncXformRef DIRECTLY FROM TOOLBAR
-==================================================
+STOP.
 
-The toolbar should continue calling:
+The selection repair is still not functioning at runtime.
 
-    updateObj(...)
+Investigate only that path.
 
-Do NOT add:
+If header becomes NUDGE 1:
 
-    syncXformRef.current(...)
+selection is proven working.
 
-after every toolbar action.
-
-That would create a second refresh path unnecessarily.
-
-The current single-object updateObj path already does:
-
-    const u = {...o, [key]: val};
-    syncXform(u);
-    return u;
-
-and syncXform does:
-
-    grp.position.set(...)
-    grp.scale.setScalar(...)
-    grp.rotation.set(...)
-
-So updateObj is already sufficient once the handler actually calls it.
+Proceed to TEST 4.
 
 ==================================================
-7. THERE IS ONLY ONE updateObj DEFINITION
+TEST 4 — DOES MODE STATE CHANGE?
 ==================================================
 
-The current file contains one relevant definition:
+With:
 
-    const updateObj = useCallback(...)
+    NUDGE 1
 
-Do not keep searching for a shadow implementation.
+visible, click ROTATE.
 
-The bug is upstream: the toolbar has no ids to iterate after viewport selection.
+The button must visibly enter its active style AND log:
 
-==================================================
-8. WHY MOVE WAS MISLEADING
-==================================================
+    [SCENE TOOLBAR] ROTATE CLICK
 
-Do not use "I can move it in the viewport" as evidence that the MOVE +/- button
-works.
+Then log sceneXform from an effect:
 
-The viewport still has its older direct manipulation path:
+    useEffect(() => {
+        console.log('[SCENE XFORM STATE]', sceneXform);
+    }, [sceneXform]);
 
-    click object
-      ->
-    dragMode = "drag" / "dragY"
+Expected:
 
-and that path changes the object directly.
+    rotate
 
-So there are currently two independent behaviours:
+If click log occurs but sceneXform remains unchanged:
 
-A. viewport drag
-    works from selId / dragId
+investigate the state setter/binding.
 
-B. toolbar nudge
-    works from selIds
+If it becomes rotate:
 
-If viewport selection fills only selId:
+proceed.
 
-    A works
-    B is dead
+Do the same for X axis.
 
-That is exactly the observed situation.
+Expected:
+
+    sceneAxis === 'x'
 
 ==================================================
-9. MAKE THE TOOLBAR'S EMPTY STATE TRUTHFUL
+TEST 5 — DOES + ENTER THE NUDGE HANDLER?
 ==================================================
 
-The toolbar is always rendered and currently only lowers opacity when:
+Click + exactly once.
 
-    selIds.size === 0
+At the FIRST line of the + handler log:
 
-That made this bug harder to recognize because active-looking buttons could
-still be clicked while they had no targets.
+    console.log('[SCENE NUDGE ENTER]', {
+        mode: sceneXform,
+        axis: sceneAxis,
+        ids: [...selIds],
+        count: selIds.size
+    });
 
-Keep the toolbar visible for discoverability, but when selIds.size === 0:
+Expected:
 
-    show SELECT
-or
-    disable +/- pointer interaction
+    mode: rotate
+    axis: x
+    count: 1
 
-Preferred:
+If this log does not appear:
 
-    mode buttons remain usable
-    +/- disabled
-    label says SELECT OBJECT
+the + button/event wiring is the failure.
 
-Then when selection exists:
+Do not inspect updateObj.
 
-    label = NUDGE
-    +/- enabled
+If it appears:
 
-Do not allow a silent no-op state.
-
-==================================================
-10. ADD A TEMPORARY INVARIANT
-==================================================
-
-During this pass, add a development diagnostic:
-
-    if (selId && !selIds.has(selId)) {
-        console.warn('[SCENE selection] active id missing from selIds',
-                     selId, [...selIds]);
-    }
-
-Do not auto-fix it inside a render effect.
-
-Fix every selection mutation path that causes it.
-
-This should help find any other old code that still sets only selId.
+proceed.
 
 ==================================================
-11. AUDIT EVERY setSelId CALL THAT MEANS "SELECT THIS OBJECT"
+TEST 6 — DOES THE LOOP FIND THE OBJECT?
 ==================================================
 
-The file has several setSelId call sites.
+Inside:
 
-Do NOT mechanically add setSelIds everywhere.
+    selIds.forEach(id => ...)
 
-Classify them.
+log:
 
-For places that genuinely mean:
+    console.log('[SCENE NUDGE OBJECT]', {
+        id,
+        found: !!o,
+        rx: o?.rx,
+        ry: o?.ry,
+        scale: o?.scale,
+        x: o?.x,
+        y: o?.y,
+        z: o?.z
+    });
 
-    user selected / newly active object
+For ROTATE X + expect:
 
-ensure selIds is also correct.
+    found: true
 
-Examples likely needing review:
+and then log the exact proposed call:
 
-    addToScene
-    duplicate
-    viewport click
-    load/import selection
-    primitive creation
+    [SCENE NUDGE CALL] id rx OLD -> OLD+5
 
-For places that only maintain the anchor while an existing multi-selection is
-preserved, do not collapse the Set accidentally.
+If found=false:
 
-The layer-list path already has explicit multi-select logic and should remain
-the reference.
+STOP.
 
-==================================================
-12. SPECIFIC VIEWPORT SELECTION IMPLEMENTATION
-==================================================
+Investigate object lookup only.
 
-A safe first version:
+If found=true:
 
-    if (hits.length) {
-        const hid = hits[0].object.userData.gid;
-
-        if (e.ctrlKey || e.metaKey) {
-            setSelIds(prev => {
-                const next = new Set(prev);
-
-                if (next.has(hid)) {
-                    next.delete(hid);
-
-                    if (selRef.current === hid) {
-                        const replacement = next.values().next().value ?? null;
-                        selRef.current = replacement;
-                        setSelId(replacement);
-                    }
-                } else {
-                    next.add(hid);
-                    selRef.current = hid;
-                    setSelId(hid);
-                }
-
-                return next;
-            });
-        } else {
-            selRef.current = hid;
-            setSelId(hid);
-            setSelIds(new Set([hid]));
-        }
-
-        ...
-    }
-
-Do not necessarily copy this verbatim if existing selection helpers can express
-the same policy more cleanly.
-
-Prefer one canonical selection helper if possible.
+proceed.
 
 ==================================================
-13. AFTER SELECTION FIX, TEST +/- SPECIFICALLY
+TEST 7 — DOES updateObj RUN?
 ==================================================
 
-Do not drag the model during this test.
+Temporarily add at the absolute beginning of updateObj:
 
-Start from a known object:
+    console.log('[UPDATEOBJ ENTER]', { id, key, val });
 
-    x=0
-    rx=0
-    ry=0
-    scale=1
+ROTATE X + must produce:
 
-Then:
+    key: 'rx'
 
-MOVE / X / +
-    x -> 1
+SCALE + must produce:
+
+    key: 'scale'
+
+MOVE X + must produce:
+
+    key: 'x'
+
+If SCENE NUDGE CALL appears but UPDATEOBJ ENTER does not:
+
+we have a call/reference problem.
+
+If UPDATEOBJ ENTER appears:
+
+proceed.
+
+==================================================
+TEST 8 — STATE + LIVE THREE VALUE
+==================================================
+
+For one object start with:
+
+    rx = 0
+    scale = 1
 
 ROTATE / X / +
-    rx -> 5
 
-ROTATE / Y / +
-    ry -> 5
+Immediately after the update has committed, report:
 
-SCALE / +
-    scale -> 1.1
+    scene object's rx
+    objsRef object's rx
+    threeRef.current.meshMap[id].rotation.x
 
-Check BOTH:
+Expected:
 
-    React scene object values
-    live THREE group transform
+    scene rx = 5
+    objsRef rx = 5
+    THREE rotation.x ≈ 0.08726646
 
-Expected THREE values:
+Then SCALE / +.
 
-    position.x = 1
-    rotation.x ≈ 0.087266
-    rotation.y ≈ 0.087266
-    scale.x/y/z = 1.1
+Expected:
 
-This is a much stronger test than "looks different".
+    scene scale = 1.1
+    objsRef scale = 1.1
+    THREE scale.x = 1.1
+    THREE scale.y = 1.1
+    THREE scale.z = 1.1
 
-==================================================
-14. IF ROTATE/SCALE STILL FAIL AFTER selIds=1
-==================================================
+Do not use visual appearance as the test.
 
-ONLY THEN investigate downstream.
-
-At that point log immediately before and after updateObj:
-
-    state object:
-        rx / ry / scale
-
-    live group:
-        rotation.x / rotation.y / scale.x
-
-If state changes but live group does not:
-
-    inspect syncXform / render-loop reset.
-
-If state does not change:
-
-    inspect updateObj.
-
-But do not skip to that branch while:
-
-    selIds.size === 0
-
-because no transform function is being called at all.
+Read the values.
 
 ==================================================
-15. EFFECT RESET BLOCK IS NOT THE FIRST SUSPECT
+IMPORTANT: DO NOT FIX THE FIRST SUSPICIOUS THING YOU SEE
 ==================================================
 
-There is a per-frame reset block that restores:
+Complete the diagnostic chain until you can state:
 
-    rotation from obj.rx / obj.ry
-    scale from obj.scale
+    LAST PASS:
+        <specific boundary>
 
-when no effect owns those components.
+    FIRST FAIL:
+        <specific boundary>
 
-That is actually compatible with toolbar edits PROVIDED the scene state changed,
-because the reset uses the stored values.
+Example:
 
-So do not alter the effect guards merely to make toolbar rotation/scale persist.
+    LAST PASS:
+        browser pointer reaches toolbar container
 
-If updateObj writes:
+    FIRST FAIL:
+        ROTATE React onClick never fires
 
-    obj.rx = 5
+or:
 
-then the reset should restore to 5 degrees, not zero.
+    LAST PASS:
+        updateObj receives rx=5
 
-Likewise:
+    FIRST FAIL:
+        scene object remains rx=0
 
-    obj.scale = 1.1
-
-should reset to 1.1.
-
-Only revisit this if measured state and rendered group disagree.
-
-==================================================
-16. DO NOT ROUTE TOOLBAR THROUGH DIRECT DRAG
-==================================================
-
-The direct viewport drag path bypassing updateObj is a separate architectural
-cleanup.
-
-It should eventually be unified.
-
-But do NOT fix that simultaneously with this bug.
-
-First prove:
-
-    viewport click
-      ->
-    selIds populated
-      ->
-    toolbar updateObj works
-
-Then handle direct-drag unification separately.
-
-One variable at a time.
+That is the evidence required before changing code.
 
 ==================================================
-17. ACCEPTANCE TEST
+ABOUT THE CANVAS THEORY
 ==================================================
 
-PASS only if:
+The current strongest untested lead is:
 
-A.
-    viewport plain-click:
-        selId == id
-        selIds == {id}
+    React renders toolbar inside mountRef
+    Three effect later appendChild(canvas) to mountRef
 
-B.
-    MOVE +/- works without dragging
+so canvas is a later DOM sibling.
 
-C.
-    ROTATE X +/- works
+The toolbar visually appears above the canvas because it has zIndex:5.
 
-D.
-    ROTATE Y +/- works
+That DOES NOT by itself prove which element wins hit-testing.
 
-E.
-    SCALE +/- works
+Do not "fix pointer events" based on that reasoning.
 
-F.
-    ctrl-click adds second object
+Prove it with:
 
-G.
-    transform on selection affects both according to current updateObj semantics
+    toolbar onPointerDown
 
-H.
-    layer-list selection still works
+and:
 
-I.
-    direct viewport drag still works
+    document.elementFromPoint(...)
 
-J.
-    no generator/export changes
+first.
 
 ==================================================
-REPORT BACK
+DO NOT REVERT YET
 ==================================================
 
-Return:
+Do not revert the Scene toolbar yet.
 
-1. selId immediately after viewport click
-2. selIds immediately after viewport click
-3. whether old code updated only selId
-4. MOVE +/- result without dragging
-5. ROTATE X +/- state + THREE group result
-6. ROTATE Y +/- state + THREE group result
-7. SCALE +/- state + THREE group result
-8. multi-select result
-9. any remaining active-id / Set mismatch warnings
+The toolbar implementation may be completely correct and merely unreachable
+from pointer input.
 
-Do not make another transform-maths change until this selection invariant is
-fixed and tested.
+A diagnostic this small is cheaper and more informative than deleting the work.
+
+If the diagnostic shows the architecture is fundamentally fighting the canvas,
+THEN we can decide whether to remove it and rebuild from the working RIG
+interaction pattern.
+
+==================================================
+REPORT BACK ONLY THE OBSERVATIONS
+==================================================
+
+Return this table:
+
+TEST 1 toolbar pointerdown:
+TEST 1 rotate onclick:
+
+TEST 2 elementFromPoint:
+TEST 2 toolbar pointer-events:
+TEST 2 canvas pointer-events:
+TEST 2 toolbar computed z-index:
+TEST 2 canvas computed z-index:
+
+TEST 3 header:
+TEST 3 selId:
+TEST 3 selIds:
+
+TEST 4 sceneXform after ROTATE:
+TEST 4 sceneAxis after X:
+
+TEST 5 nudge handler entered:
+TEST 5 mode/axis/count:
+
+TEST 6 object found:
+TEST 6 proposed key/value:
+
+TEST 7 updateObj entered:
+TEST 7 received key/value:
+
+TEST 8 scene stored value:
+TEST 8 objsRef value:
+TEST 8 THREE value:
+
+LAST PASS:
+FIRST FAIL:
+
+If a test fails, later tests that depend on it can be marked NOT REACHED.
+
+Do not make a seventh functional change until FIRST FAIL is established.
