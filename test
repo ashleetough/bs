@@ -1,723 +1,413 @@
-Proceed with the RIG skeleton/clip redesign, but ONLY PHASE 1 in this build.
+ROOT CAUSE FOUND. Do not redesign the migration helpers.
 
-Do not change the RIG UI yet.
-Do not add phase yet.
-Do not add multiple clip controls yet.
+The recursion is REAL and directly visible in the current source.
 
-The goal of this pass is:
+Inside:
 
-    NEW INTERNAL DATA MODEL
-        +
-    LOSSLESS MIGRATION
-        +
-    IDENTICAL SINGLE-CLIP BAS OUTPUT
+    function assertRigMigrationLossless() {
 
-Nothing else.
+the function contains:
 
-==================================================
-WHY WE ARE CHANGING IT
-==================================================
+    assertRigMigrationLossless();
 
-Current rigParts mixes two separate concepts:
+inside its own try block before the BAS comparison.
 
-STRUCTURE:
+That is unconditional self-recursion.
 
-    mod
-    parentIdx
-    offsetX
-    offsetY
-    offsetZ
-    scale
+It repeatedly calls itself until JavaScript throws:
 
-MOTION:
+    Maximum call stack size exceeded
 
-    animX
-    animY
-    animZ
-    amplitude
-    speed
+The suspected cycle:
 
-This means:
+    normalizeRigInput
+      -> migrateLegacyRig
+      -> normalizeRigInput
 
-- a part has one permanent motion definition
-- there is no IDLE/WALK/ATTACK concept
-- no phase offset
-- changing action requires changing the skeleton data itself
-- two legs with the same settings move in lockstep
-
-We want:
-
-    SKELETON
-        stable hierarchy and transforms
-
-    CLIPS
-        named motion definitions
+does NOT exist.
 
 ==================================================
-IMPORTANT CORRECTION TO THE PROPOSED TRACK SHAPE
+1. REMOVE THE ACCIDENTAL SELF-CALL
 ==================================================
 
-Do NOT use only:
+Delete ONLY this line from inside assertRigMigrationLossless():
 
-    {
-      partIdx,
-      axis,
-      amplitude,
-      speed,
-      phase
-    }
+    assertRigMigrationLossless();
 
-as the canonical track representation yet.
+Do not change migrateLegacyRig, normalizeRigInput, or rigToLegacyParts as part
+of this fix.
 
-The existing rig allows a single part to animate X, Y and Z simultaneously:
+After removal, the function should flow directly:
 
-    animX
-    animY
-    animZ
+    fixture
+      ->
+    generate legacy BAS
+      ->
+    migrate
+      ->
+    flatten migrated rig
+      ->
+    generate migrated BAS
+      ->
+    byte comparison
 
-and generateRigBAS creates separate AX/AY/AZ accumulators and combines them in
-one MODROT.
+==================================================
+2. MAKE THE GATE FAIL CLOSED
+==================================================
 
-Therefore a safe migration must preserve multi-axis animation exactly.
+Yes: this gate should THROW on failure, not quietly return false.
 
-Use:
+It is being treated as a safety invariant for the rig migration.
 
-    skeleton = {
-      parts: [
-        {
-          id,
-          label,
-          mod,
-          parentIdx,
-          offsetX,
-          offsetY,
-          offsetZ,
-          scale
-        }
-      ]
-    }
+A log-only false result is too easy for callers to ignore.
 
-    clips = [
-      {
-        id,
-        name: "IDLE",
-        loop: true,
-        tracks: [
-          {
-            partIdx,
-            x: {
-              enabled,
-              amplitude,
-              speed,
-              phase
-            },
-            y: {
-              enabled,
-              amplitude,
-              speed,
-              phase
-            },
-            z: {
-              enabled,
-              amplitude,
-              speed,
-              phase
-            }
-          }
-        ]
+Preferred structure:
+
+    function assertRigMigrationLossless() {
+      const fixture = [...];
+
+      const legacy = generateRigBAS(...);
+      const migrated = generateRigBAS(...);
+
+      if (legacy !== migrated) {
+        find first differing line;
+        throw new Error(
+          `[RIG] migration is not lossless at line ${n}: ...`
+        );
       }
-    ]
 
-For PHASE 1:
-
-    phase must default to 0
-    and MUST NOT alter generated BAS yet.
-
-We are storing it for the future only.
-
-==================================================
-SIMPLE CASE MUST REMAIN SIMPLE
-==================================================
-
-A newly-created rig automatically has:
-
-    one clip:
-        IDLE
-
-A simple spinning model should require no extra user work compared with today.
-
-Do not make the user manually create IDLE just to reproduce current behaviour.
-
-==================================================
-MIGRATION FROM CURRENT rigParts
-==================================================
-
-Create one explicit migration helper.
-
-Something like:
-
-    migrateLegacyRig(parts)
-
-Input:
-
-    existing rigParts[]
-
-Output:
-
-    {
-      skeleton,
-      clips
+      return true;
     }
 
-For every old part:
+Do NOT swallow its own exception inside the assertion.
 
-STRUCTURE fields copy directly:
+An assertion that catches itself and converts failure to false is not really an
+assertion.
 
-    mod
-    parentIdx
-    offsetX
-    offsetY
-    offsetZ
-    scale
-    label/id as applicable
+If UI code wants graceful handling, catch it at the boundary that invokes the
+gate:
 
-MOTION becomes an IDLE track.
+    try {
+      assertRigMigrationLossless();
+    } catch (err) {
+      console.error(err);
+      disable RIG export / surface a visible error;
+    }
 
-For each part:
-
-    x.enabled = !!part.animX
-    y.enabled = !!part.animY
-    z.enabled = !!part.animZ
-
-Current amplitude/speed are SHARED across enabled axes.
-
-Therefore:
-
-    enabled X -> x.amplitude = old amplitude
-                 x.speed     = old speed
-
-    enabled Y -> y.amplitude = old amplitude
-                 y.speed     = old speed
-
-    enabled Z -> z.amplitude = old amplitude
-                 z.speed     = old speed
-
-All phases:
-
-    0
-
-If no axis is enabled:
-
-    either omit the track entirely
-
-or
-
-    retain it with all enabled=false
-
-Prefer OMITTING empty tracks if that does not complicate later code.
-
-Do not invent motion for static parts.
+The checker itself should remain strict.
 
 ==================================================
-DO NOT USE "NON-ZERO AMPLITUDE" AS THE MIGRATION TEST
+3. DO NOT RUN IT RECURSIVELY OR FROM THE GENERATOR
 ==================================================
 
-The design note suggested:
+Audit call sites after removing the self-call.
 
-    one track per part that has a non-zero amplitude
+There should be no invocation of assertRigMigrationLossless() from:
 
-That would be WRONG.
+    generateRigBAS
+    migrateLegacyRig
+    normalizeRigInput
+    rigToLegacyParts
 
-Current semantics explicitly use:
+Those functions must stay pure with respect to the safety check.
 
-    amplitude = 0
+The gate should call THEM.
 
-to mean CONTINUOUS SPIN.
+They should never call the gate back.
 
-So amplitude 0 can absolutely be animated.
+That gives a one-way dependency:
 
-Animation existence is determined by:
+    assertion
+       -> generator
+       -> migration/helpers
 
-    animX || animY || animZ
+never:
 
-NOT amplitude > 0.
-
-Preserve this exactly.
-
-This is critical.
-
-==================================================
-CURRENT EXPORT SEMANTICS THAT MUST REMAIN IDENTICAL
-==================================================
-
-Today generateRigBAS does:
-
-for each enabled axis:
-
-    accumulator starts at 0
-
-    AXn = AXn + speed
-    AYn = AYn + speed
-    AZn = AZn + speed
-
-If amplitude == 0:
-
-    continuous rotation:
-        RAD(accumulator)
-
-If amplitude > 0:
-
-    sinusoidal swing:
-        RAD(SIN(RAD(accumulator))*amplitude)
-
-Then:
-
-    MODROT n,rx,ry,rz
-
-Structure remains:
-
-    MODLOAD
-    MODSET
-    MODJOIN
-    MODPOS
-
-Do not change any of these semantics in PHASE 1.
+    generator/helper
+       -> assertion
 
 ==================================================
-GOLDEN OUTPUT TEST
+4. FIXTURE GATE IS STILL THE RIGHT PERMANENT REGRESSION TEST
 ==================================================
 
-Before changing generateRigBAS, create a representative legacy rig fixture.
-
-It MUST include:
-
-PART 1
-    root
-    Y animation
-    amplitude 0
-    speed 2
-
-PART 2
-    child of part 1
-    X animation
-    amplitude 30
-    speed 1.5
-
-PART 3
-    child
-    X + Z BOTH enabled
-    amplitude 45
-    speed 3
-
-PART 4
-    static
-
-Include non-zero offsets and scale somewhere.
-
-Generate BAS using the CURRENT generator.
-
-Save this exact string in-memory/test fixture as:
-
-    legacyExpectedBAS
-
-Then migrate the rig to skeleton/clips and run the NEW generator.
-
-Assert:
-
-    newBAS === legacyExpectedBAS
-
-EXACT STRING EQUALITY.
-
-Not semantic similarity.
-Not equivalent line count.
-
-For a one-clip migrated rig with phase=0:
-
-    output must be byte-for-byte identical.
-
-This is the safety gate.
-
-If it differs:
-
-    stop
-    report first differing line
-    do not proceed to UI work.
-
-==================================================
-GENERATOR API
-==================================================
-
-Refactor:
-
-    generateRigBAS(parts, ...)
-
-to accept the new rig shape internally.
-
-Prefer:
-
-    generateRigBAS(rig, ...)
-
-where:
-
-    rig.skeleton.parts
-    rig.clips
-
-BUT maintain a compatibility adapter temporarily if many call sites still pass
-rigParts.
-
-Example:
-
-    normalizeRigInput(input)
-
-If Array.isArray(input):
-
-    migrateLegacyRig(input)
-
-else:
-
-    use new form
-
-This allows the app to transition without breaking every caller at once.
-
-Do not keep this adapter forever; mark it LEGACY.
-
-==================================================
-PHASE 1 GENERATOR BEHAVIOUR
-==================================================
-
-For now generate ONLY the first/default IDLE clip.
-
-Do not yet emit clip switching routines.
-
-Do not invent GOTO/GOSUB state machines in this pass.
-
-Rules:
-
-    active clip = clips[0] / IDLE
-
-For every track:
-
-    derive animX/animY/animZ behaviour from its axis channels
-
-Then emit EXACTLY the old BAS form.
-
-Phase fields are ignored in generation for now.
-
-This is deliberate.
-
-==================================================
-STATE NAMES
-==================================================
-
-Introduce explicit state:
-
-    rigSkeleton
-    rigClips
-
-Do not leave motion values duplicated on rigSkeleton.parts.
-
-After migration:
-
-    skeleton part MUST NOT own:
-        animX
-        animY
-        animZ
-        amplitude
-        speed
-        phase
-
-Those belong only to clip tracks.
-
-Otherwise we will end up with two sources of truth.
-
-==================================================
-KEEP STABLE PART IDENTITY
-==================================================
-
-Do not rely only on array position long-term.
-
-Current parentIdx and model-number constraints are index-based, but clip tracks
-need stable identity if parts can later be inserted/reordered.
-
-For now preserve:
-
-    partIdx
-
-because export model numbers depend on order.
-
-But ALSO give every skeleton part a stable id.
-
-Example:
-
-    id: "part_ab12..."
-
-Tracks may store:
-
-    partId
-
-plus resolved partIdx at generation time.
-
-If this is too large for PHASE 1, at minimum design the migration so a stable
-id is present now.
-
-Do not make future clip data depend permanently on fragile array indices.
-
-==================================================
-PARENT INDEX SEMANTICS
-==================================================
-
-Do not alter parent ordering in this pass.
-
-Current exporter requires:
-
-    parent model number < child model number
-
-Preserve parentIdx exactly.
-
-Do not add arbitrary skeleton reordering yet.
-
-==================================================
-LIVE RIG WORLD
-==================================================
-
-RigWorld/shared viewport must continue to work during PHASE 1.
-
-Adapt its animation reader to consume:
-
-    first clip / IDLE
-
-but reproduce current behaviour exactly.
-
-Do not add clip selector UI.
-
-Do not add action switching.
-
-Do not change camera/world work from the previous RIG viewport pass.
-
-==================================================
-NO PHASE BEHAVIOUR YET
-==================================================
-
-Although the schema includes:
-
-    phase
-
-keep it at zero and unused in the generator and preview for PHASE 1.
-
-Why:
-
-If migration + phase are introduced simultaneously, we cannot tell whether an
-output difference came from:
-
-    migration
-or
-    phase maths.
-
-The whole point of sequencing is to isolate these.
-
-==================================================
-SAVE / LOAD
-==================================================
-
-Inspect every place rig state is persisted/exported.
-
-New saves should use a version marker, for example:
-
-    rigVersion: 2
-
-On load:
-
-    if legacy flat rig:
-        migrate once
-
-    if rigVersion >= 2:
-        load directly
-
-Do not repeatedly migrate already-migrated data.
-
-Do not silently throw away unknown future clip fields.
-
-==================================================
-EXPORT PACKAGE
-==================================================
-
-Do not change:
-
-    RIG.ZIP file structure
-    MOD files
-    PS2 paths
-    RIG.BAS filename
-    MODLOAD/MODSET/MODJOIN/MODPOS semantics
-
-Only the internal source of animation data is changing.
-
-==================================================
-DO NOT UNIFY WITH DOOM ANIMS YET
-==================================================
-
-The conceptual vocabulary overlaps:
-
-    IDLE
-    WALK
-    ATTACK
-    DEATH
-
-But DO NOT refactor DOOM sprite animations and RIG clips into one schema in
-this pass.
-
-They animate fundamentally different things:
-
-    DOOM sprite anim:
-        texture/frame selection
-
-    RIG clip:
-        hierarchical transforms
-
-They may later share:
-
-    naming
-    clip selector UI
-    playback controls
-
-But forcing one data shape now creates unnecessary coupling.
-
-Keep the naming concept compatible, not the implementation identical.
-
-==================================================
-ASSERTIONS
-==================================================
-
-Add:
-
-1. every track resolves to an existing skeleton part
-2. no duplicate track for same part inside one clip unless explicitly allowed
-3. axis channel shape valid
-4. speed finite
-5. amplitude finite
-6. phase finite and 0..1
-7. parentIdx still points only to an earlier part or -1
-8. max active MOD/buffer constraints unchanged
-9. migrated legacy BAS exact-match assertion
-
-Do not auto-correct invalid data silently during export.
-
-Report it.
-
-==================================================
-PHASE 1 ACCEPTANCE TEST
-==================================================
-
-A. Existing current rig loads.
-
-B. Internal state becomes:
-
-    skeleton
-    IDLE clip
-
-C. UI looks exactly the same as before.
-
-D. RigWorld animation looks exactly the same.
-
-E. RIG.BAS is byte-identical before/after migration.
-
-F. RIG.ZIP contents unchanged.
-
-G. X+Z animation on one part survives migration.
-
-H. amplitude=0 continuous spin survives migration.
-
-I. static part remains static.
-
-J. parent hierarchy and offsets unchanged.
-
-Only when ALL pass is PHASE 1 complete.
-
-==================================================
-PHASE 2 — DO NOT IMPLEMENT YET
-==================================================
-
-Next build:
-
-    add clip selector
-    ADD / DUPLICATE / RENAME / DELETE clip
-    bind existing motion controls to selected clip's tracks
-
-Skeleton controls remain:
-
-    MOD
-    parent
+Keep the fixture-based exact BAS comparison.
+
+It tests important structural cases:
+
+    amplitude 0 continuous spin
+    normal swing
+    multi-axis X+Z animation
+    static part
+    parent hierarchy
     offsets
     scale
 
-Motion controls move into selected clip context.
+That makes it a good deterministic regression test.
 
-Default remains IDLE.
+Do not replace it with user-rig testing.
 
-==================================================
-PHASE 3 — DO NOT IMPLEMENT YET
-==================================================
+A permanent assertion should be:
 
-Then add phase.
-
-For swing:
-
-    phase 0..1
-        ->
-    angular offset phase*360 degrees
-
-Conceptually:
-
-    SIN(RAD(accumulator + phase*360))
-
-So:
-
-    left leg phase 0
-    right leg phase 0.5
-
-produces opposite swing.
-
-For continuous spin:
-
-decide explicitly whether phase means:
-
-    starting angular offset
-
-Likely yes:
-
-    RAD(accumulator + phase*360)
-
-But verify desired semantics before implementation.
+    deterministic
+    reproducible
+    independent of whatever project happens to be open
 
 ==================================================
-PHASE 4 — LATER
+5. ADD ACTUAL-RIG VERIFICATION ONLY DURING LEGACY LOAD
 ==================================================
 
-Only after clips and phase are solid:
+The user's actual rig IS useful as a SECOND safety check, but only when loading
+a legacy flat rig.
 
-    clip switching
-    one-shot clips
-    runtime controls
-    blending/transition rules if needed
+That is the ideal point because both representations are available:
 
-Do not design blending yet.
+    original legacy rigParts
+    migrated rig
+
+Before discarding the legacy form:
+
+    legacyBAS = generateRigBAS(originalLegacyParts, ...)
+    migratedBAS = generateRigBAS(
+        rigToLegacyParts(migratedRig),
+        ...
+    )
+
+Compare them.
+
+If they differ:
+
+    DO NOT silently continue migration
+    preserve the original legacy data
+    surface an error
+    refuse to overwrite/save as v2 until resolved
+
+This catches cases outside the fixed fixture.
+
+But do NOT run this comparison on every normal load of an already-v2 rig.
+
+For:
+
+    rigVersion >= 2
+
+there is no legacy source to compare against and no migration is occurring.
 
 ==================================================
-REPORT BACK FOR THIS BUILD ONLY
+6. SEPARATE TWO DIFFERENT GATES
+==================================================
+
+Use two explicit concepts:
+
+A. DEVELOPER REGRESSION GATE
+
+    assertRigMigrationFixture()
+
+Runs against a known fixture.
+
+Purpose:
+    prove code changes did not alter migration/export compatibility.
+
+B. LEGACY PROJECT MIGRATION CHECK
+
+    verifyLegacyRigMigration(legacyParts, migratedRig, exportSettings)
+
+Runs only when actually upgrading old project data.
+
+Purpose:
+    prove THIS USER'S rig survived migration.
+
+Do not conflate them.
+
+==================================================
+7. IMPORTANT CAVEAT ABOUT "BYTE IDENTICAL"
+==================================================
+
+The current migration creates IDs with:
+
+    Math.random()
+
+when a legacy part has no id.
+
+That does not currently affect generateRigBAS because the BAS generator does
+not emit those IDs.
+
+So BAS equality can still be deterministic.
+
+But the migration OBJECT itself is not deterministic.
+
+For a permanent regression fixture, prefer deterministic generated part IDs.
+
+Example:
+
+    id: p.id || `part_${i}`
+
+or another stable migration-specific ID.
+
+Random IDs make:
+
+    save diffs
+    migration snapshots
+    reproducibility
+    test debugging
+
+needlessly noisy.
+
+Do NOT change this if existing saved v2 rigs already depend on those IDs in a
+way that would break references.
+
+But for newly migrated legacy rigs, stable IDs are preferable.
+
+Inspect track partId/reference semantics before changing it.
+
+==================================================
+8. ALSO HARDEN normalizeRigInput
+==================================================
+
+Current behavior:
+
+    if Array        -> migrate
+    if rigVersion>=2 -> accept
+    otherwise       -> migrateLegacyRig([])
+
+That last branch silently converts a malformed/unknown object into an EMPTY rig.
+
+That is dangerous.
+
+For example:
+
+    { skeleton: ..., clips: ... }
+
+with accidentally missing rigVersion becomes:
+
+    empty rig
+
+instead of producing an error.
+
+Do NOT necessarily change it in the same commit as the recursion fix unless
+safe, but flag it as the next correctness cleanup.
+
+Preferred eventually:
+
+    if Array.isArray(input):
+        legacy migrate
+
+    if input && input.rigVersion >= 2:
+        validate and return
+
+    if input == null:
+        return new empty default rig
+
+    otherwise:
+        throw new Error("Unknown rig data shape")
+
+Do not silently destroy unknown rig-shaped data.
+
+==================================================
+9. TEST THE FIX DIRECTLY IN THE APP
+==================================================
+
+Do not rely on the eval harness for the decisive test.
+
+After removing the self-call, run in the actual application environment:
+
+    const result = assertRigMigrationLossless()
+
+Expected:
+
+    true
+
+and NO console:
+
+    Maximum call stack size exceeded
+
+Then deliberately break one migration field temporarily in a local test, for
+example alter migrated speed.
+
+Expected:
+
+    assertion THROWS
+    first differing BAS line is reported
+
+Then restore it.
+
+This proves both pass and fail behavior.
+
+==================================================
+10. HASH THE OUTPUTS FOR DIAGNOSTICS
+==================================================
+
+Optionally log:
+
+    legacy BAS length
+    migrated BAS length
+    hash legacy
+    hash migrated
+
+plus:
+
+    exact equality PASS
+
+Do not use hash equality instead of string equality.
+
+The string comparison remains authoritative.
+
+Hashes are just a compact diagnostic.
+
+==================================================
+11. EXPORT POLICY
+==================================================
+
+Yes: if the permanent fixture gate fails in the running build, disable RIG
+export.
+
+Reason:
+
+The application no longer knows that its migration/export semantics are safe.
+
+Do not block unrelated Scene/DOOM exports unless they use this rig migration.
+
+Scope the failure to RIG.
+
+Recommended UI:
+
+    RIG MIGRATION INTEGRITY FAILED
+    Export disabled.
+    <first difference/error>
+
+This is better than producing a possibly-corrupt RIG.ZIP after merely logging
+false.
+
+==================================================
+12. DO NOT PROCEED TO KEYFRAMES OR CLIP SWITCHING
+==================================================
+
+Keep those blocked until all of these pass:
+
+    fixture gate PASS
+    no recursion
+    deliberate-failure test THROWS
+    real legacy rig migration comparison PASS
+    already-v2 rig loads without migration
+    RIG export enabled only when integrity gate passes
+
+No keyframes.
+No generated clip switching.
+No new rig schema work until this is trustworthy.
+
+==================================================
+REPORT BACK
 ==================================================
 
 Return:
 
-1. final new rig schema
-2. migration function
-3. confirmation amplitude=0 spin migrates correctly
-4. legacy fixture description
-5. old BAS hash/string
-6. new BAS hash/string
-7. exact equality PASS/FAIL
-8. first differing line if FAIL
-9. preview parity
-10. save/load version handling
-11. confirmation UI unchanged
-12. confirmation phase is stored but unused
+1. confirmation accidental self-call removed
+2. fixture gate result in real app
+3. whether any stack overflow remains
+4. deliberate migration-break test result
+5. first-difference reporting result
+6. actual legacy user-rig comparison result
+7. whether already-v2 loads skip migration comparison
+8. export blocking behavior on gate failure
+9. normalizeRigInput malformed-object behavior
+10. whether random part IDs were retained or made deterministic
 
-Do not proceed into clip UI or phase until exact legacy-output equality passes.
+Do not change the rig animation model in this pass.
