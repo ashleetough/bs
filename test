@@ -1,78 +1,159 @@
-# Pickups as a layer: how to do it correctly
+One clarification on decoration sizing:
 
-## Status
+I want DECORATIONS to be independently resizable in BOTH directions.
 
-Reverted. Pickups are whole-tile map cells `6`/`7` again, which is the state
-that works. `e8e6146884e080dd`.
+This is not just "make them taller."
 
-Decorations DO have a working 28×28 layer. So the pattern is proven — my
-execution of it for pickups was not.
+Each decoration resource should support:
 
-## What I did, and why it failed
+    W = horizontal size
+    H = vertical size
 
-I built the whole feature in one pass across five places:
+Examples:
 
-1. layer state
-2. paint interception
-3. map rendering
-4. generator scan
-5. autosave
+    1 × 1   normal
+    2 × 1   wide bush / table / barrier
+    3 × 1   very wide prop
+    1 × 2   tall prop
+    1 × 3   tree / column / sign
+    2 × 2   large square prop
+    3 × 2   large wide prop
 
-Then a migration effect on top. Nothing was verified between steps. When it
-didn't work I debugged the consequences instead of reverting, and made it worse
-twice:
+The current resource model already has:
 
-- **A destructive migration.** It cleared `6`/`7` from `mapRows` — and it ran
-  before the async storage restore, so it migrated the DEFAULT map, stripped
-  it, and the restore then overwrote the result. It should never have deleted
-  anything before the thing it migrated to was proven to render.
-- **A lost paint handler.** A later edit removed the block that wrote the
-  layer. Every other piece stayed in place around a hole, so nothing ever
-  populated it — and I spent three rounds diagnosing rendering.
+    d.w
+    d.h
 
-Decorations were built incrementally over a previous session and worked.
-Same feature, two approaches, opposite outcomes.
+and the current UI already exposes separate W / H controls.
 
-## Questions
+KEEP that architecture.
 
-1. **Is the incremental order below right?** My instinct is that each step must
-   be independently visible before the next is written:
-   - layer state + render it, with a temporary hardcoded test value, so the
-     drawing is proven before anything writes to it
-   - paint into the layer, map cell untouched, so both representations exist
-     and the old one still works
-   - generator reads the layer, with the map scan kept as a fallback
-   - only then, if ever, stop writing the map cell
-   - migration last, and additive — never clearing the source
+Do not collapse sizing into one uniform SCALE value.
 
-2. **Should the migration exist at all?** The generator can de-duplicate a
-   legacy cell against a layer entry indefinitely. A permanent compatibility
-   read may be better than a one-time destructive conversion, given this data
-   lives in browser storage the user cannot easily back up.
+==================================================
+EXPECTED RENDER SEMANTICS
+==================================================
 
-3. **Is there a way to make the async-restore race structurally impossible**
-   rather than gated? Everything keyed on `mapRows` runs first against
-   `DEFAULT_MAP` and then again after the restore lands. That trap will catch
-   the next feature too.
+Height and width must affect the final SPRPOS2 rectangle independently.
 
-4. **Was quarter-tile placement even worth it for pickups?** Decorations
-   benefit — several torches on one wall. A health pack and an ammo box in the
-   same tile may not be a real need, and the whole feature may have been
-   solving a problem that did not exist.
+Current generator approach is directionally correct:
 
-## What I would want to keep from the attempt
+    H controls projected sprite height
+    W controls projected sprite width
 
-- the per-type colour palette, which made decorations far more readable
-- the picker, which replaced click-to-cycle
-- the console warning when placements exceed `MAX_PICKUPS`
+For example:
 
-These could be applied to whole-tile pickups without a layer at all: more than
-two pickup TYPES, each with its own colour and a picker, still one per tile.
-That may be most of the value for a fraction of the risk.
+    1 × 3
 
-## Constraints for whoever does this
+must render substantially taller while keeping roughly normal width.
 
-- decorations already work — copy their pattern exactly rather than improvising
-- `MAX_PICKUPS` caps what reaches the BASIC; each emits a block
-- storage restore is async and lands after first render
-- never write a migration that deletes the source representation
+    3 × 1
+
+must render substantially wider while keeping roughly normal height.
+
+    3 × 2
+
+must render both wider AND taller.
+
+Do not interpret W/H as map occupancy.
+
+The decoration remains ONE placed anchor in the 28×28 decor placement layer.
+
+W/H only controls how large that billboard appears in the game.
+
+==================================================
+IMPORTANT DISTINCTION
+==================================================
+
+"Extend horizontally and vertically" means VISUAL sprite dimensions.
+
+It does NOT mean:
+
+    occupy several map cells
+    duplicate the sprite into adjacent cells
+    create several decor records
+    change collision automatically
+    stretch the atlas source rectangle
+
+The source art remains one sprite frame.
+
+SPRTEX selects the same source artwork.
+
+SPRP0S2 / SPRPOS2 destination rectangle stretches that artwork to the desired
+world-visible proportions.
+
+==================================================
+CURRENT CODE
+==================================================
+
+The current build already stores and displays:
+
+    W
+    H
+
+per decor resource.
+
+Keep the existing controls.
+
+The chip readout such as:
+
+    2×1
+    1×3
+
+is useful and should remain.
+
+The current BASIC generator also resolves:
+
+    dw
+    dh
+
+independently.
+
+Do not remove this while investigating emulator behaviour.
+
+==================================================
+TEST MATRIX
+==================================================
+
+Use one clearly asymmetric test sprite and render four copies at the SAME
+distance:
+
+    A = 1×1
+    B = 2×1
+    C = 1×2
+    D = 2×2
+
+Expected:
+
+    A normal
+
+    B:
+        same height as A
+        ~2× width
+
+    C:
+        same width as A
+        ~2× height
+
+    D:
+        ~2× width
+        ~2× height
+
+This test is much better than comparing only 1×1 vs 1×3 because it proves
+horizontal and vertical scaling independently.
+
+==================================================
+DO NOT CHANGE THE MATHS AGAIN BLINDLY
+==================================================
+
+The current emitted BASIC already produces materially different SPRPOS2
+rectangles for different W/H values.
+
+Before changing the generator again, determine whether the emulator actually
+honours destination rectangle scaling.
+
+If the emulator renders all four test cases identically despite different
+SPRP0S2/SPRP0S2 arguments, treat that as an emulator limitation until hardware
+testing says otherwise.
+
+Hardware remains the source of truth.
