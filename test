@@ -1,458 +1,78 @@
-I inspected the actual uploaded JSX independently.
-
-DO NOT make another speculative SVG/rendering fix.
-
-There is a real lifecycle/data-safety bug in the pickup migration that must be
-fixed before debugging anything else.
-
-==================================================
-WHAT IS VERIFIED FROM THE CURRENT SOURCE
-==================================================
-
-MapGrid genuinely receives:
-
-    pickupGrid={pickupGrid}
-
-There is one MapGrid call.
-
-The pickup renderer genuinely executes inside the SVG after:
-
-    {cells}{guides}{edgeLines}
-
-and uses:
-
-    <polygon ... />
-
-with the same 28x28 -> map-coordinate conversion as the working decoration
-layer.
-
-The polygon itself is valid SVG.
-
-Do NOT replace polygon with circle as a "fix".
-Do NOT change viewBox maths.
-Do NOT change draw order.
-
-Those are not justified by the source.
-
-==================================================
-THE REAL PROBLEM: MIGRATION RUNS TOO EARLY
-==================================================
-
-Current initialization is approximately:
-
-    mapRows = sessionStorage doom_map OR DEFAULT_MAP
-    pickupGrid = empty 28x28
-
-Then immediately:
-
-    useEffect(() => {
-        if (pickupMigrated.current) return;
-
-        if mapRows contains 6/7:
-            pickupMigrated.current = true
-            copy 6/7 into pickupGrid
-            CLEAR 6/7 FROM mapRows
-    }, [mapRows]);
-
-But the authoritative persisted DOOM state is restored ASYNCHRONOUSLY later:
-
-    const meta = await window.storage.get('doom:meta');
-    ...
-    if (info.mapRows) setMapRows(info.mapRows);
-    ...
-    if (info.pickupGrid) setPickupGrid(info.pickupGrid);
-
-These two systems are racing.
-
-The migration is allowed to mutate mapRows/pickupGrid BEFORE:
-
-    loadedOnce.current === true
-
-and before we know whether doom:meta contains:
-
-    legacy mapRows
-    new pickupGrid
-    both
-    neither
-
-That is an invalid place to perform a destructive migration.
-
-==================================================
-IMMEDIATE SAFETY FIX
-==================================================
-
-FIRST:
-
-REMOVE THE DESTRUCTIVE CLEAR.
-
-Delete/disable:
-
-    setMapRows(rows.map(row =>
-      row.split('').map(c => (c === '6' || c === '7') ? '0' : c).join('')));
-
-Do not clear legacy 6/7 cells anywhere during this debugging pass.
-
-Existing user data must remain visible/recoverable.
-
-The old cell markers already still render:
-
-    if(cell==='6') ...
-    if(cell==='7') ...
-
-Keep those.
-
-This gives us a safe compatibility state:
-
-    legacy 6/7 remains visible
-    layer pickup may also exist
-    generator can deduplicate legacy -> layer as it already does
-
-Temporary duplicate representation is MUCH safer than destructive migration.
-
-==================================================
-SECOND: DO NOT MIGRATE BEFORE RESTORE COMPLETES
-==================================================
-
-The current standalone migration effect should not run against initial/default
-state while async storage restoration is still pending.
-
-Do not merely add:
-
-    if (!loadedOnce.current) return;
-
-to the existing [mapRows] effect without thinking through React timing.
-
-loadedOnce is a REF.
-
-Changing:
-
-    loadedOnce.current = true
-
-does NOT itself rerender or retrigger an effect whose dependency is only:
-
-    [mapRows]
-
-So a legacy restored map could fail to migrate depending on update ordering.
-
-Instead, make migration an explicit part of RESTORE/INITIALIZATION.
-
-Preferred architecture:
-
-1. Read doom:meta.
-2. Establish the authoritative saved state.
-3. If saved metadata already contains a valid pickupGrid:
-       use it.
-       leave legacy map 6/7 alone for compatibility for now.
-4. If saved metadata has NO pickupGrid but its mapRows contains legacy 6/7:
-       derive an ADDITIVE pickupGrid from those rows.
-       DO NOT clear the rows.
-5. If there is no saved metadata:
-       derive an additive pickupGrid from whatever initial/default map is used,
-       again without clearing mapRows.
-6. Only after that mark loading complete.
-
-One initialization path.
-No racing migration effect.
-
-==================================================
-USE ONE PURE MIGRATION HELPER
-==================================================
-
-Extract a helper with NO React state writes:
-
-    function pickupGridFromLegacyRows(rows, baseGrid) {
-        const out = Array.isArray(baseGrid)
-            ? baseGrid.slice()
-            : new Array(28*28).fill(0);
-
-        (rows || []).forEach((row, r) => {
-            String(row || '').split('').forEach((c, col) => {
-                if (c !== '6' && c !== '7') return;
-
-                const slot = (r * 2) * 28 + (col * 2);
-
-                if (!out[slot])
-                    out[slot] = c === '6' ? 1 : 2;
-            });
-        });
-
-        return out;
-    }
-
-The exact helper name is unimportant.
-
-The important properties are:
-
-    PURE
-    ADDITIVE
-    NON-DESTRUCTIVE
-    DETERMINISTIC
-
-Do not modify rows inside it.
-
-==================================================
-THIRD: TEST THE RENDERER WITHOUT USER INTERACTION
-==================================================
-
-After making migration safe, prove whether MapGrid can render the layer.
-
-Do NOT wait for the user to decipher console instrumentation.
-
-Temporarily initialize/inject ONE known diagnostic slot after authoritative
-state loading:
-
-    pickupGrid[0] = 1
-
-or use a dedicated temporary diagnostic array passed to MapGrid.
-
-Expected location:
-
-    top-left quarter of map cell 0,0
-
-Expected visible shape:
-
-    coloured diamond
-
-This separates:
-
-    state/migration/painting bug
-
-from:
-
-    SVG rendering bug
-
-with certainty.
-
-If a forced nonzero pickupGrid entry renders:
-
-    THE SVG PATH IS GOOD.
-
-Stop investigating polygon/viewBox/draw order.
-
-Then the failure is entirely in population/state.
-
-If a forced entry does NOT render despite MapGrid receiving it:
-
-THEN inspect DOM output for:
-
-    polygon
-
-and its computed:
-
-    points
-    fill
-    visibility
-    display
-    opacity
-
-But only after the forced-entry test fails.
-
-==================================================
-IMPORTANT DISCOVERY ABOUT THE CURRENT CODE
-==================================================
-
-The existing old pickup markers are still present:
-
-    if(cell==='6') ...
-    if(cell==='7') ...
-
-Therefore once destructive clearing is removed, an old map CANNOT become
-visually blank merely because the new layer fails.
-
-That is exactly the safe transitional architecture we want.
-
-Keep it until the layer is proven.
-
-==================================================
-ALSO CLEAN UP THIS DEAD/STALE LOGIC
-==================================================
-
-toggleCell handles pickup painting near its beginning:
-
-    if (paintTile === '6' || paintTile === '7') {
-        ...
-        setPickupGrid(...)
-        return;
-    }
-
-Later in the same function there is still:
-
-    if('67'.includes(paintTile)) {
-        const MAX_PICKUPS = 8;
-        const count = mapRows...
-        ...
-    }
-
-That later block is unreachable for pickup brushes because the earlier pickup
-branch already returned.
-
-Do NOT make this the primary bug fix, but record it as stale logic.
-
-More importantly, the pickup cap eventually needs to count:
-
-    pickupGrid.filter(Boolean)
-
-not legacy 6/7 map cells, because pickupGrid is now the authored representation.
-
-Do that cleanup only after visibility is restored.
-
-==================================================
-DO NOT REVERT THE WHOLE PICKUP LAYER YET
-==================================================
-
-The layer architecture itself is useful:
-
-    28x28
-    quarter-cell placement
-    multiple resource-defined pickup types
-
-and the source currently shows:
-
-    painting -> setPickupGrid
-    MapGrid -> pickupGrid
-    save -> pickupGrid
-    restore -> pickupGrid
-    generator -> pickupGrid
-
-So we have enough coherent plumbing that deleting the feature is premature.
-
-What MUST be reverted is the destructive migration policy.
-
-==================================================
-DATA RECOVERY / EXISTING SAVES
-==================================================
-
-Be careful here.
-
-If an earlier build already:
-
-1. loaded a user's map containing 6/7
-2. migrated them into pickupGrid
-3. cleared mapRows
-4. autosaved the resulting state
-
-then the old 6/7 may already be absent from the persisted map.
-
-However, because autosave includes pickupGrid, those pickups may still exist in
-saved pickupGrid.
-
-Therefore DO NOT write any "repair" that assumes:
-
-    no 6/7 in mapRows == pickup lost
-
-First inspect the restored pickupGrid.
-
-If it contains entries, preserve them.
-
-The additive helper must never overwrite an already populated layer slot:
-
-    if (!out[slot]) ...
-
-==================================================
-ACCEPTANCE TESTS
-==================================================
-
-Run all of these.
-
-A. Legacy-only map
-
-    mapRows contains 6 and 7
-    saved pickupGrid absent
-
-Expected:
-
-    old markers remain visible
-    additive layer receives matching entries
-    mapRows STILL contains 6 and 7
-
-B. New-format save
-
-    mapRows has no 6/7
-    pickupGrid contains pickups
-
-Expected:
-
-    pickups render from pickupGrid
-    pickupGrid unchanged
-
-C. Transitional save
-
-    mapRows contains 6/7
-    pickupGrid already contains entries
-
-Expected:
-
-    existing pickupGrid entries preserved
-    legacy entries added only into empty corresponding slots
-    mapRows unchanged
-
-D. Fresh placement
-
-Select pickup brush and click four different quarters of one map cell.
-
-Expected:
-
-    four independent pickupGrid slots can be populated
-    four visible diamonds appear
-    map cell remains floor
-
-E. Persistence
-
-Place pickups.
-Reload.
-
-Expected:
-
-    exact pickupGrid restored
-    same positions visible
-
-F. Forced-render diagnostic
-
-Set one known pickupGrid slot nonzero.
-
-Expected:
-
-    visible diamond
-
-This must prove the renderer independently from painting/migration.
-
-==================================================
-DO NOT TOUCH
-==================================================
-
-Do not touch:
-
-    MOD/TEX/PAL writers
-    atlas writer
-    wall rendering
-    DDA
-    raycaster projection
-    pickup BASIC rendering
-    decoration layer
-    shared sprite-page architecture
-
-This is currently an editor state/migration issue.
-
-==================================================
-REPORT BACK
-==================================================
-
-Return:
-
-1. Exact migration code removed/replaced.
-2. Where authoritative migration now occurs.
-3. Whether forced pickupGrid[0]=1 rendered.
-4. Legacy-only test result.
-5. New-format test result.
-6. Transitional test result.
-7. Four-quarter placement result.
-8. Reload/persistence result.
-9. Whether mapRows was modified anywhere by migration.
-10. Build/hash.
-
-Most important invariant:
-
-    MIGRATION MUST NOT DELETE USER MAP DATA.
-
-Do not declare the pickup-layer bug fixed until a forced nonzero pickupGrid
-entry visibly renders.
+# Pickups as a layer: how to do it correctly
+
+## Status
+
+Reverted. Pickups are whole-tile map cells `6`/`7` again, which is the state
+that works. `e8e6146884e080dd`.
+
+Decorations DO have a working 28×28 layer. So the pattern is proven — my
+execution of it for pickups was not.
+
+## What I did, and why it failed
+
+I built the whole feature in one pass across five places:
+
+1. layer state
+2. paint interception
+3. map rendering
+4. generator scan
+5. autosave
+
+Then a migration effect on top. Nothing was verified between steps. When it
+didn't work I debugged the consequences instead of reverting, and made it worse
+twice:
+
+- **A destructive migration.** It cleared `6`/`7` from `mapRows` — and it ran
+  before the async storage restore, so it migrated the DEFAULT map, stripped
+  it, and the restore then overwrote the result. It should never have deleted
+  anything before the thing it migrated to was proven to render.
+- **A lost paint handler.** A later edit removed the block that wrote the
+  layer. Every other piece stayed in place around a hole, so nothing ever
+  populated it — and I spent three rounds diagnosing rendering.
+
+Decorations were built incrementally over a previous session and worked.
+Same feature, two approaches, opposite outcomes.
+
+## Questions
+
+1. **Is the incremental order below right?** My instinct is that each step must
+   be independently visible before the next is written:
+   - layer state + render it, with a temporary hardcoded test value, so the
+     drawing is proven before anything writes to it
+   - paint into the layer, map cell untouched, so both representations exist
+     and the old one still works
+   - generator reads the layer, with the map scan kept as a fallback
+   - only then, if ever, stop writing the map cell
+   - migration last, and additive — never clearing the source
+
+2. **Should the migration exist at all?** The generator can de-duplicate a
+   legacy cell against a layer entry indefinitely. A permanent compatibility
+   read may be better than a one-time destructive conversion, given this data
+   lives in browser storage the user cannot easily back up.
+
+3. **Is there a way to make the async-restore race structurally impossible**
+   rather than gated? Everything keyed on `mapRows` runs first against
+   `DEFAULT_MAP` and then again after the restore lands. That trap will catch
+   the next feature too.
+
+4. **Was quarter-tile placement even worth it for pickups?** Decorations
+   benefit — several torches on one wall. A health pack and an ammo box in the
+   same tile may not be a real need, and the whole feature may have been
+   solving a problem that did not exist.
+
+## What I would want to keep from the attempt
+
+- the per-type colour palette, which made decorations far more readable
+- the picker, which replaced click-to-cycle
+- the console warning when placements exceed `MAX_PICKUPS`
+
+These could be applied to whole-tile pickups without a layer at all: more than
+two pickup TYPES, each with its own colour and a picker, still one per tile.
+That may be most of the value for a fraction of the risk.
+
+## Constraints for whoever does this
+
+- decorations already work — copy their pattern exactly rather than improvising
+- `MAX_PICKUPS` caps what reaches the BASIC; each emits a block
+- storage restore is async and lands after first render
+- never write a migration that deletes the source representation
