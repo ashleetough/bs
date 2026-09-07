@@ -1,659 +1,723 @@
-We need to stop "making RIG look like SCRIPT" and instead make RIG USE THE
-SAME 3D WORKSPACE PATTERN as SCRIPT.
+Proceed with the RIG skeleton/clip redesign, but ONLY PHASE 1 in this build.
 
-The current RIG is still architecturally separate:
+Do not change the RIG UI yet.
+Do not add phase yet.
+Do not add multiple clip controls yet.
 
-    <RigViewport size={420} ... />
+The goal of this pass is:
 
-inside a centred box, with its own:
+    NEW INTERNAL DATA MODEL
+        +
+    LOSSLESS MIGRATION
+        +
+    IDENTICAL SINGLE-CLIP BAS OUTPUT
 
-- renderer
-- PerspectiveCamera
-- orbit maths
-- wheel zoom
-- grid
-- lights
-- fixed sizing
-- camera behaviour
-
-That is why it never quite matches SCRIPT.
-
-USER REQUIREMENT:
-
-    FORGE -> RIG
-
-must have the EXACT SAME 3D WORLD SPACE and RIGHT-BAR EXPERIENCE as SCRIPT.
-
-Not "similar".
-Not "same colours".
-Not another manually matched renderer.
-
-Use the existing SCRIPT world behaviour as the reference implementation.
+Nothing else.
 
 ==================================================
-1. FIRST: INSPECT SCRIPT, DO NOT GUESS
+WHY WE ARE CHANGING IT
 ==================================================
 
-Before changing RIG, trace the actual SCRIPT layout and viewport code.
+Current rigParts mixes two separate concepts:
 
-Specifically identify:
+STRUCTURE:
 
-    ScriptsPlaceholder
-    scriptMountRef
-    usePreviewViewport(...)
-    rightPanelOpen / sidebarOpen
-    scriptFull
-    the viewport flex container
-    the right sidebar wrapper
-    the collapse tab
-    renderer sizing
-    camera/orbit controls
-    resize observer
-    grid
-    background/theme handling
-
-Document the exact reusable pieces.
-
-SCRIPT currently has:
-
-    centre viewport:
-        flex:1
-        position:relative
-        overflow:hidden
-
-    mount:
-        width:100%
-        height:100%
-
-and its 3D renderer sizes to the actual mount.
-
-RIG must work the same way.
-
-==================================================
-2. REMOVE THE FIXED 420x420 RIG WORLD
-==================================================
-
-Current RIG does this:
-
-    <RigViewport
-      ...
-      size={420}
-    />
-
-That is wrong for the desired layout.
-
-The 3D world must NOT be a fixed square.
-
-RIG viewport should fill all available space between the Forge tab/header and
-the right sidebar:
-
-    width: 100% of remaining centre area
-    height: 100%
-    flex: 1
-    minWidth: 0
-    minHeight: 0
-
-Use a ResizeObserver exactly as SCRIPT does.
-
-The canvas must resize in-place when:
-
-    window changes
-    right panel opens/closes
-    Forge panel changes size
-    browser zoom/layout changes
-
-Do NOT rebuild the WebGL renderer just because dimensions change.
-
-==================================================
-3. USE THE SAME WORLD SPACE AS SCRIPT
-==================================================
-
-RIG must use the same WORLD conventions as SCRIPT.
-
-That means the same:
-
-- Three.js coordinate system
-- camera FOV
-- near/far planes
-- orbit target conventions
-- camera orbit behaviour
-- pan behaviour if SCRIPT supports it
-- wheel zoom/dolly behaviour
-- grid size/orientation
-- grid theme colours
-- background treatment
-- renderer antialiasing
-- devicePixelRatio treatment
-- lighting defaults
-- scene unit scale
-
-Do NOT hand-copy approximate values if there is already a shared helper.
-
-Prefer extracting/reusing the SCRIPT viewport implementation.
-
-The goal is:
-
-    if an object at world position X,Y,Z is shown in SCRIPT
-    and the same object is shown in RIG,
-    it appears in the SAME world coordinate system.
-
-No RIG-only scale illusion.
-
-No fixed 420px framing.
-
-No separate camera convention.
-
-==================================================
-4. PREFERRED ARCHITECTURE
-==================================================
-
-Do NOT keep two independently maintained viewport engines:
-
-    usePreviewViewport()
-    RigViewport()
-
-That guarantees drift.
-
-Instead extract/shared-build a generic workspace viewport, for example:
-
-    useWorkspaceViewport(...)
-or
-    SharedForgeViewport
-
-which owns:
-
-    scene
-    camera
-    renderer
-    grid
-    orbit controls
-    resize
-    theme
-    lifecycle/disposal
-
-Then supply MODE-SPECIFIC scene population.
-
-SCRIPT population:
-
-    synthetic SCRIPT slot objects
-    optional bounds box
-
-RIG population:
-
-    rig hierarchy groups
-    MODJOIN parent hierarchy
-    MODPOS local offsets
-    per-part animation
-
-The world/camera implementation should be ONE thing.
-
-If refactoring usePreviewViewport safely is too large for this pass, then make
-RIG call/usePreviewViewport-compatible shared internals rather than recreating
-camera/render behaviour a third time.
-
-==================================================
-5. RIG HIERARCHY STILL REMAINS RIG-SPECIFIC
-==================================================
-
-Do NOT lose the good part of RigViewport.
-
-Preserve:
-
-    parts[]
+    mod
     parentIdx
-    offsets
+    offsetX
+    offsetY
+    offsetZ
     scale
-    MODJOIN-style hierarchy
-    animation amplitude
-    animation speed
 
-The hierarchy should be added INTO the shared world.
+MOTION:
 
-Conceptually:
-
-    shared world
-      ├── grid
-      ├── lights
-      └── rigRoot
-            ├── part 1
-            │    └── part 2
-            └── part 3
-
-Animation can update those Groups every frame.
-
-But camera/grid/world sizing must come from the shared SCRIPT viewport.
-
-==================================================
-6. COPY SCRIPT'S RIGHT-PANEL STRUCTURE
-==================================================
-
-The RIG right bar should behave like SCRIPT's right bar.
-
-SCRIPT currently has:
-
-    wrapper with position:relative
-    collapse handle sticking into viewport
-    animated width
-    fixed sidebar width when open
-    flex column
-    overflow hidden at outer level
-    inner scrolling content
-
-Use the SAME pattern.
-
-Do not leave RIG as:
-
-    width:240
-    always visible
-    overflowY:auto
-
-Current RIG right panel is structurally different.
-
-Make it:
-
-    rigRightOpen state
-
-with:
-
-    open width matching SCRIPT right panel
-    closed width 0
-    same 16px half-height collapse handle
-    same transition timing
-    same border
-    same background
-    same z-index
-    same arrow orientation
-    same scroll behaviour
-
-If possible, reuse the same sidebar shell component rather than duplicating
-the JSX.
-
-==================================================
-7. MATCH THE RIGHT BAR WIDTH EXACTLY
-==================================================
-
-SCRIPT's current right panel open width is:
-
-    256px
-
-Use the SAME width for RIG.
-
-Do not use 240px.
-
-The screenshot currently shows RIG narrower/different because it is still
-using its own 240px panel.
-
-==================================================
-8. RIG RIGHT-BAR CONTENT
-==================================================
-
-The shell/function should match SCRIPT, but RIG keeps its own controls.
-
-Put the existing RIG controls inside the shared right-panel shell:
-
-    CAMERA
-    BG COLOR
-    BODY PARTS
-    ADD PART
-    parent/join settings
-    offsets
-    scale
-    axis
+    animX
+    animY
+    animZ
     amplitude
     speed
-    script display
-    export path
-    export RIG.ZIP
-    help note
 
-Do NOT delete RIG functionality just to copy SCRIPT styling.
+This means:
 
-We are replacing the container/interaction model, not the feature set.
+- a part has one permanent motion definition
+- there is no IDLE/WALK/ATTACK concept
+- no phase offset
+- changing action requires changing the skeleton data itself
+- two legs with the same settings move in lockstep
 
-==================================================
-9. CAMERA CONTROLS: DO NOT KEEP DUPLICATE RIG ORBIT MATH
-==================================================
+We want:
 
-The current RigViewport has:
+    SKELETON
+        stable hierarchy and transforms
 
-    yaw
-    pitch
-    dist
-    custom mousedown/mousemove
-    custom wheel scaling
-
-Remove that duplication once RIG is on the shared viewport.
-
-Mouse behaviour in RIG should be IDENTICAL to SCRIPT.
-
-If SCRIPT supports:
-
-    left drag orbit
-    right/mid drag pan
-    scroll zoom
-    WASD / arrow navigation
-
-then RIG should support those too.
-
-Do not leave RIG with drag+wheel only.
+    CLIPS
+        named motion definitions
 
 ==================================================
-10. CAMERA SLIDERS
+IMPORTANT CORRECTION TO THE PROPOSED TRACK SHAPE
 ==================================================
 
-The RIG camera sliders can remain, but reinterpret them as controls over the
-SAME shared camera state.
+Do NOT use only:
 
-Do not have:
+    {
+      partIdx,
+      axis,
+      amplitude,
+      speed,
+      phase
+    }
 
-    sliders controlling one starting camera
-    mouse orbit controlling a disconnected private camera model
+as the canonical track representation yet.
 
-Preferred:
+The existing rig allows a single part to animate X, Y and Z simultaneously:
 
-    CAM Z / CAM Y / TARGET Y
+    animX
+    animY
+    animZ
 
-update/reset the shared orbit state.
+and generateRigBAS creates separate AX/AY/AZ accumulators and combines them in
+one MODROT.
 
-If the user mouse-orbits afterward, the shared state updates normally.
+Therefore a safe migration must preserve multi-axis animation exactly.
 
-If maintaining those sliders becomes awkward, preserve them as:
+Use:
 
-    RESET/STARTING FRAME
+    skeleton = {
+      parts: [
+        {
+          id,
+          label,
+          mod,
+          parentIdx,
+          offsetX,
+          offsetY,
+          offsetZ,
+          scale
+        }
+      ]
+    }
 
-but do not create another camera system solely for them.
+    clips = [
+      {
+        id,
+        name: "IDLE",
+        loop: true,
+        tracks: [
+          {
+            partIdx,
+            x: {
+              enabled,
+              amplitude,
+              speed,
+              phase
+            },
+            y: {
+              enabled,
+              amplitude,
+              speed,
+              phase
+            },
+            z: {
+              enabled,
+              amplitude,
+              speed,
+              phase
+            }
+          }
+        ]
+      }
+    ]
 
-==================================================
-11. EXACT SAME FLOOR / GRID
-==================================================
+For PHASE 1:
 
-Current RigViewport creates:
+    phase must default to 0
+    and MUST NOT alter generated BAS yet.
 
-    new THREE.GridHelper(600,20,0x1a2a3a,0x111a26)
-
-That is hardcoded.
-
-SCRIPT's shared preview derives the grid from theme colours and its existing
-workspace setup.
-
-Use the SCRIPT implementation.
-
-The RIG grid should not be a visual approximation.
-
-When the theme changes:
-
-    SCRIPT grid changes
-    RIG grid changes identically
-
-without rebuilding the entire renderer if SCRIPT already handles live theme
-updates.
-
-==================================================
-12. SAME BACKGROUND BEHAVIOUR
-==================================================
-
-Current RIG has a separate rigBgColor driving scene.background.
-
-If SCRIPT world uses the theme-deepened background, make that the default for
-RIG too.
-
-If RIG BG COLOR is an intentional export feature, keep it as an optional
-override:
-
-    WORLD BG:
-        THEME / CUSTOM
-
-Default:
-    THEME
-
-CUSTOM:
-    rigBgColor
-
-But the initial view should visually match SCRIPT exactly.
-
-Do not let RIG start as a flat black square while SCRIPT has a themed recessed
-world.
-
-==================================================
-13. SAME LIGHTING
-==================================================
-
-Current RIG uses:
-
-    AmbientLight(white,0.75)
-    DirectionalLight(white,0.6)
-
-SCRIPT/shared preview has its own lighting.
-
-Use SCRIPT's lighting in RIG.
-
-Do not maintain two lighting implementations.
-
-The rig parts should look like they belong in the same application world.
+We are storing it for the future only.
 
 ==================================================
-14. SAME MODEL MATERIAL PATH
+SIMPLE CASE MUST REMAIN SIMPLE
 ==================================================
 
-Current RIG blindly creates:
+A newly-created rig automatically has:
 
-    MeshLambertMaterial({
-      color: 0x99aabb
-    })
+    one clip:
+        IDLE
 
-for every loaded part.
+A simple spinning model should require no extra user work compared with today.
 
-That means RIG does NOT necessarily show the model the same way SCRIPT does.
-
-Inspect how usePreviewViewport builds meshes from:
-
-    geoCache
-    modCache
-    texCache
-    tint
-    texture
-
-RIG should reuse that material/model creation path where possible.
-
-The user's actual MOD should look the same in SCRIPT and RIG.
-
-Do not reduce it to a generic blue-grey Lambert mesh merely because it is in a
-rig.
-
-This is part of "same 3D world."
+Do not make the user manually create IDLE just to reproduce current behaviour.
 
 ==================================================
-15. SAME FULL-SCREEN MODEL IF APPROPRIATE
+MIGRATION FROM CURRENT rigParts
 ==================================================
 
-SCRIPT has a viewport-level FULL SCREEN control that collapses panels.
+Create one explicit migration helper.
 
-RIG should have the same pattern if there is no conflict with Forge's own UI.
+Something like:
+
+    migrateLegacyRig(parts)
+
+Input:
+
+    existing rigParts[]
+
+Output:
+
+    {
+      skeleton,
+      clips
+    }
+
+For every old part:
+
+STRUCTURE fields copy directly:
+
+    mod
+    parentIdx
+    offsetX
+    offsetY
+    offsetZ
+    scale
+    label/id as applicable
+
+MOTION becomes an IDLE track.
+
+For each part:
+
+    x.enabled = !!part.animX
+    y.enabled = !!part.animY
+    z.enabled = !!part.animZ
+
+Current amplitude/speed are SHARED across enabled axes.
+
+Therefore:
+
+    enabled X -> x.amplitude = old amplitude
+                 x.speed     = old speed
+
+    enabled Y -> y.amplitude = old amplitude
+                 y.speed     = old speed
+
+    enabled Z -> z.amplitude = old amplitude
+                 z.speed     = old speed
+
+All phases:
+
+    0
+
+If no axis is enabled:
+
+    either omit the track entirely
+
+or
+
+    retain it with all enabled=false
+
+Prefer OMITTING empty tracks if that does not complicate later code.
+
+Do not invent motion for static parts.
+
+==================================================
+DO NOT USE "NON-ZERO AMPLITUDE" AS THE MIGRATION TEST
+==================================================
+
+The design note suggested:
+
+    one track per part that has a non-zero amplitude
+
+That would be WRONG.
+
+Current semantics explicitly use:
+
+    amplitude = 0
+
+to mean CONTINUOUS SPIN.
+
+So amplitude 0 can absolutely be animated.
+
+Animation existence is determined by:
+
+    animX || animY || animZ
+
+NOT amplitude > 0.
+
+Preserve this exactly.
+
+This is critical.
+
+==================================================
+CURRENT EXPORT SEMANTICS THAT MUST REMAIN IDENTICAL
+==================================================
+
+Today generateRigBAS does:
+
+for each enabled axis:
+
+    accumulator starts at 0
+
+    AXn = AXn + speed
+    AYn = AYn + speed
+    AZn = AZn + speed
+
+If amplitude == 0:
+
+    continuous rotation:
+        RAD(accumulator)
+
+If amplitude > 0:
+
+    sinusoidal swing:
+        RAD(SIN(RAD(accumulator))*amplitude)
+
+Then:
+
+    MODROT n,rx,ry,rz
+
+Structure remains:
+
+    MODLOAD
+    MODSET
+    MODJOIN
+    MODPOS
+
+Do not change any of these semantics in PHASE 1.
+
+==================================================
+GOLDEN OUTPUT TEST
+==================================================
+
+Before changing generateRigBAS, create a representative legacy rig fixture.
+
+It MUST include:
+
+PART 1
+    root
+    Y animation
+    amplitude 0
+    speed 2
+
+PART 2
+    child of part 1
+    X animation
+    amplitude 30
+    speed 1.5
+
+PART 3
+    child
+    X + Z BOTH enabled
+    amplitude 45
+    speed 3
+
+PART 4
+    static
+
+Include non-zero offsets and scale somewhere.
+
+Generate BAS using the CURRENT generator.
+
+Save this exact string in-memory/test fixture as:
+
+    legacyExpectedBAS
+
+Then migrate the rig to skeleton/clips and run the NEW generator.
+
+Assert:
+
+    newBAS === legacyExpectedBAS
+
+EXACT STRING EQUALITY.
+
+Not semantic similarity.
+Not equivalent line count.
+
+For a one-clip migrated rig with phase=0:
+
+    output must be byte-for-byte identical.
+
+This is the safety gate.
+
+If it differs:
+
+    stop
+    report first differing line
+    do not proceed to UI work.
+
+==================================================
+GENERATOR API
+==================================================
+
+Refactor:
+
+    generateRigBAS(parts, ...)
+
+to accept the new rig shape internally.
+
+Prefer:
+
+    generateRigBAS(rig, ...)
+
+where:
+
+    rig.skeleton.parts
+    rig.clips
+
+BUT maintain a compatibility adapter temporarily if many call sites still pass
+rigParts.
+
+Example:
+
+    normalizeRigInput(input)
+
+If Array.isArray(input):
+
+    migrateLegacyRig(input)
+
+else:
+
+    use new form
+
+This allows the app to transition without breaking every caller at once.
+
+Do not keep this adapter forever; mark it LEGACY.
+
+==================================================
+PHASE 1 GENERATOR BEHAVIOUR
+==================================================
+
+For now generate ONLY the first/default IDLE clip.
+
+Do not yet emit clip switching routines.
+
+Do not invent GOTO/GOSUB state machines in this pass.
+
+Rules:
+
+    active clip = clips[0] / IDLE
+
+For every track:
+
+    derive animX/animY/animZ behaviour from its axis channels
+
+Then emit EXACTLY the old BAS form.
+
+Phase fields are ignored in generation for now.
+
+This is deliberate.
+
+==================================================
+STATE NAMES
+==================================================
+
+Introduce explicit state:
+
+    rigSkeleton
+    rigClips
+
+Do not leave motion values duplicated on rigSkeleton.parts.
+
+After migration:
+
+    skeleton part MUST NOT own:
+        animX
+        animY
+        animZ
+        amplitude
+        speed
+        phase
+
+Those belong only to clip tracks.
+
+Otherwise we will end up with two sources of truth.
+
+==================================================
+KEEP STABLE PART IDENTITY
+==================================================
+
+Do not rely only on array position long-term.
+
+Current parentIdx and model-number constraints are index-based, but clip tracks
+need stable identity if parts can later be inserted/reordered.
+
+For now preserve:
+
+    partIdx
+
+because export model numbers depend on order.
+
+But ALSO give every skeleton part a stable id.
+
+Example:
+
+    id: "part_ab12..."
+
+Tracks may store:
+
+    partId
+
+plus resolved partIdx at generation time.
+
+If this is too large for PHASE 1, at minimum design the migration so a stable
+id is present now.
+
+Do not make future clip data depend permanently on fragile array indices.
+
+==================================================
+PARENT INDEX SEMANTICS
+==================================================
+
+Do not alter parent ordering in this pass.
+
+Current exporter requires:
+
+    parent model number < child model number
+
+Preserve parentIdx exactly.
+
+Do not add arbitrary skeleton reordering yet.
+
+==================================================
+LIVE RIG WORLD
+==================================================
+
+RigWorld/shared viewport must continue to work during PHASE 1.
+
+Adapt its animation reader to consume:
+
+    first clip / IDLE
+
+but reproduce current behaviour exactly.
+
+Do not add clip selector UI.
+
+Do not add action switching.
+
+Do not change camera/world work from the previous RIG viewport pass.
+
+==================================================
+NO PHASE BEHAVIOUR YET
+==================================================
+
+Although the schema includes:
+
+    phase
+
+keep it at zero and unused in the generator and preview for PHASE 1.
+
+Why:
+
+If migration + phase are introduced simultaneously, we cannot tell whether an
+output difference came from:
+
+    migration
+or
+    phase maths.
+
+The whole point of sequencing is to isolate these.
+
+==================================================
+SAVE / LOAD
+==================================================
+
+Inspect every place rig state is persisted/exported.
+
+New saves should use a version marker, for example:
+
+    rigVersion: 2
+
+On load:
+
+    if legacy flat rig:
+        migrate once
+
+    if rigVersion >= 2:
+        load directly
+
+Do not repeatedly migrate already-migrated data.
+
+Do not silently throw away unknown future clip fields.
+
+==================================================
+EXPORT PACKAGE
+==================================================
+
+Do not change:
+
+    RIG.ZIP file structure
+    MOD files
+    PS2 paths
+    RIG.BAS filename
+    MODLOAD/MODSET/MODJOIN/MODPOS semantics
+
+Only the internal source of animation data is changing.
+
+==================================================
+DO NOT UNIFY WITH DOOM ANIMS YET
+==================================================
+
+The conceptual vocabulary overlaps:
+
+    IDLE
+    WALK
+    ATTACK
+    DEATH
+
+But DO NOT refactor DOOM sprite animations and RIG clips into one schema in
+this pass.
+
+They animate fundamentally different things:
+
+    DOOM sprite anim:
+        texture/frame selection
+
+    RIG clip:
+        hierarchical transforms
+
+They may later share:
+
+    naming
+    clip selector UI
+    playback controls
+
+But forcing one data shape now creates unnecessary coupling.
+
+Keep the naming concept compatible, not the implementation identical.
+
+==================================================
+ASSERTIONS
+==================================================
 
 Add:
 
-    ⤢ FULL SCREEN
+1. every track resolves to an existing skeleton part
+2. no duplicate track for same part inside one clip unless explicitly allowed
+3. axis channel shape valid
+4. speed finite
+5. amplitude finite
+6. phase finite and 0..1
+7. parentIdx still points only to an earlier part or -1
+8. max active MOD/buffer constraints unchanged
+9. migrated legacy BAS exact-match assertion
 
-inside the RIG viewport in the same bottom-left location/style.
+Do not auto-correct invalid data silently during export.
 
-When enabled:
-
-    hide/collapse RIG right bar
-    maximise world viewport
-
-Esc exits.
-
-Do not put the control inside the right panel.
-
-It belongs to the viewport.
-
-==================================================
-16. RIGHT PANEL COLLAPSE
-==================================================
-
-Add the same centre-edge tab shown in SCRIPT.
-
-RIG open:
-
-    [ world                 ][ RIG PANEL ]
-                             ‹/› handle
-
-RIG closed:
-
-    [ world fills space ][handle]
-
-Opening and closing must NOT reset:
-
-    camera angle
-    zoom
-    rig animation time
-    selected part
-
-Only resize the viewport.
+Report it.
 
 ==================================================
-17. LAYOUT TARGET
+PHASE 1 ACCEPTANCE TEST
 ==================================================
 
-The final RIG layout should structurally be:
+A. Existing current rig loads.
 
-    Forge header / tabs
-    ┌────────────────────────────────────────────────────────────┐
-    │                                                            │
-    │               SAME SCRIPT 3D WORLD                         │
-    │                                                            │
-    │ grid / orbit / zoom / theme / renderer                    │
-    │                                                            │
-    │                                         ┌────────────────┐ │
-    │                                         │ CAMERA         │ │
-    │                                         │ BODY PARTS     │ │
-    │                                         │ ...            │ │
-    │                                         │ EXPORT         │ │
-    │                                         └────────────────┘ │
-    └────────────────────────────────────────────────────────────┘
+B. Internal state becomes:
 
-Not:
+    skeleton
+    IDLE clip
 
-    centred 420x420 viewport
-    +
-    separate arbitrary sidebar.
+C. UI looks exactly the same as before.
 
-==================================================
-18. DO NOT CHANGE RIG EXPORT SEMANTICS
-==================================================
+D. RigWorld animation looks exactly the same.
 
-Do not alter:
+E. RIG.BAS is byte-identical before/after migration.
 
-    generateRigBAS
-    MODJOIN
-    MODPOS
-    parent ordering
-    rig ZIP
-    rig MOD paths
-    animation export semantics
+F. RIG.ZIP contents unchanged.
 
-This pass is the editor/world UX.
+G. X+Z animation on one part survives migration.
 
-The generated PS2 rig behaviour must remain identical.
+H. amplitude=0 continuous spin survives migration.
+
+I. static part remains static.
+
+J. parent hierarchy and offsets unchanged.
+
+Only when ALL pass is PHASE 1 complete.
 
 ==================================================
-19. LIFECYCLE / WEBGL SAFETY
+PHASE 2 — DO NOT IMPLEMENT YET
 ==================================================
 
-Be careful here because this app has already hit WebGL context exhaustion.
+Next build:
 
-Do not create a new renderer on every sidebar resize or camera change.
+    add clip selector
+    ADD / DUPLICATE / RENAME / DELETE clip
+    bind existing motion controls to selected clip's tracks
 
-Renderer lifecycle should be like SCRIPT:
+Skeleton controls remain:
 
-    create once on mount/rebuild-worthy dependency
-    resize with ResizeObserver
-    dispose once on unmount
+    MOD
+    parent
+    offsets
+    scale
 
-Remove all listeners on cleanup.
+Motion controls move into selected clip context.
 
-Do not leave:
-
-    window mousemove
-    window mouseup
-    wheel
-
-listeners behind when switching Forge modes.
+Default remains IDLE.
 
 ==================================================
-20. ACCEPTANCE TEST
+PHASE 3 — DO NOT IMPLEMENT YET
 ==================================================
 
-After implementation compare SCRIPT and RIG side by side.
+Then add phase.
 
-A. Empty world:
-    same background treatment
-    same grid scale
-    same grid orientation
-    same camera perspective
+For swing:
 
-B. Same MOD:
-    load same model in SCRIPT and RIG
-    same apparent world scale
-    same shading/material appearance
+    phase 0..1
+        ->
+    angular offset phase*360 degrees
 
-C. Controls:
-    same drag behaviour
-    same wheel zoom
-    same pan/navigation where supported
+Conceptually:
 
-D. Resize:
-    collapse RIG right bar
-    canvas expands
-    camera DOES NOT reset
+    SIN(RAD(accumulator + phase*360))
 
-E. Re-open panel:
-    same camera position/orbit remains
+So:
 
-F. Window resize:
-    viewport fills available area correctly
+    left leg phase 0
+    right leg phase 0.5
 
-G. RIG animation:
-    hierarchy still animates correctly
+produces opposite swing.
 
-H. Export:
-    RIG.BAS/RIG.ZIP output unchanged
+For continuous spin:
+
+decide explicitly whether phase means:
+
+    starting angular offset
+
+Likely yes:
+
+    RAD(accumulator + phase*360)
+
+But verify desired semantics before implementation.
 
 ==================================================
-21. REMOVE OBSOLETE RIGVIEWPORT DUPLICATION
+PHASE 4 — LATER
 ==================================================
 
-Once the shared-world RIG path is verified, remove or reduce the old
-RigViewport implementation.
+Only after clips and phase are solid:
 
-Do not leave a second unused renderer/camera implementation in the file.
+    clip switching
+    one-shot clips
+    runtime controls
+    blending/transition rules if needed
 
-If RigViewport remains as a wrapper, it should be a thin adapter to the shared
-viewport, not another Three.js engine.
+Do not design blending yet.
 
 ==================================================
-22. REPORT BACK
+REPORT BACK FOR THIS BUILD ONLY
 ==================================================
 
 Return:
 
-1. exact SCRIPT viewport implementation reused
-2. exact SCRIPT sidebar shell reused
-3. old RigViewport camera/render code removed
-4. RIG open sidebar width
-5. RIG collapse behaviour
-6. world/grid/background parity with SCRIPT
-7. camera-control parity
-8. model-material parity
-9. renderer lifecycle/disposal
-10. confirmation rig export code unchanged
+1. final new rig schema
+2. migration function
+3. confirmation amplitude=0 spin migrates correctly
+4. legacy fixture description
+5. old BAS hash/string
+6. new BAS hash/string
+7. exact equality PASS/FAIL
+8. first differing line if FAIL
+9. preview parity
+10. save/load version handling
+11. confirmation UI unchanged
+12. confirmation phase is stored but unused
 
-Inspect the current file first.
-
-Do not stop after moving the JSX around and call it done.
-
-The test is FUNCTIONAL PARITY:
-
-    RIG WORLD == SCRIPT WORLD
-
-with RIG-specific hierarchy/edit controls layered into it.
+Do not proceed into clip UI or phase until exact legacy-output equality passes.
